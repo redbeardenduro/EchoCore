@@ -1,655 +1,706 @@
 # avatar_display.py
 """
-Displays the visual avatar using Pygame.
-Animates based on application state and audio amplitude.
+Manages the visual avatar display using Pygame.
+
+Renders animations synchronized with application state and audio amplitude,
+displaying status text, error messages, and optional debug information.
 """
+
 import threading
 import queue
 import time
 import math
-import logging
-import pygame
-import numpy as np
 import random
-import config
-from state_manager import StateManager, State
+import logging
+import sys
+from typing import Optional, List, Tuple, Dict, Any # For type hinting
+
+# Attempt Pygame import early and handle failure
+try:
+    import pygame
+    import numpy as np # Required for some effects
+except ImportError as e:
+    logging.critical(f"Pygame or NumPy not found. Avatar display cannot function. Error: {e}")
+    logging.critical("Please install them: pip install pygame numpy")
+    # Set a flag or dummy class to prevent errors if the rest of the app can run without avatar
+    pygame = None
+    np = None
+    # raise # Or re-raise if Pygame is absolutely essential
+
+# Import project modules
+try:
+    import config
+    from state_manager import StateManager, State
+except ImportError as e:
+    logging.error(f"Error importing project modules in avatar_display.py: {e}")
+    raise
+
 
 # Setup logger
 logger = logging.getLogger(__name__)
 
+# Type alias for color tuples/lists
+ColorTuple = Tuple[int, int, int]
+ColorList = List[int] # From config JSON
+ColorValue = Union[ColorTuple, ColorList] # Type hint for color values
+
+# Type alias for particle dictionary
+ParticleDict = Dict[str, Any] # More specific types possible if needed
+
 class AvatarDisplay(threading.Thread):
     """
-    Thread to manage the Pygame window and render the avatar.
-    Receives amplitude data from avatar_queue.
+    Thread to manage the Pygame window and render the avatar visualization.
+
+    Receives normalized amplitude data (float) from the avatar_queue and
+    monitors the application state via the StateManager to update animations.
     """
-    def __init__(self, avatar_queue: queue.Queue, state_manager: StateManager, stop_event: threading.Event):
-        super().__init__(daemon=True)
+    def __init__(
+        self,
+        avatar_queue: queue.Queue[float], # Receives normalized amplitude
+        state_manager: StateManager,
+        stop_event: threading.Event
+    ):
+        """
+        Initializes the AvatarDisplay thread.
+
+        Args:
+            avatar_queue: Queue receiving normalized amplitude (0.0-1.0).
+            state_manager: The application's state manager instance.
+            stop_event: Threading event to signal when to stop.
+        """
+        # Check if Pygame loaded successfully before proceeding
+        if pygame is None:
+            logger.error("Pygame dependency missing, AvatarDisplay cannot initialize.")
+            # We need to prevent the thread from starting
+            # One way is to set the stop_event immediately or raise an exception
+            stop_event.set() # Signal thread should not run
+            # Or raise an error to halt initialization
+            raise RuntimeError("Pygame not found, cannot start AvatarDisplay.")
+
+
+        super().__init__(name="AvatarDisplayThread", daemon=True)
         self.avatar_queue = avatar_queue
         self.state_manager = state_manager
         self.stop_event = stop_event
-        self.screen = None
-        self.clock = None
-        self.current_amplitude = 0.0
-        self.running = False
-        
-        # Enhanced avatar variables
-        self.amplitude_history = []  # Store recent amplitude values for smoother visualization
-        self.history_max_length = 20  # Number of amplitude values to retain
-        self.particles = []  # For particle effect
-        self.pulse_phase = 0  # For pulsing effect
-        self.transition_effect = 0  # For state transition effects
-        self.previous_state = None  # To detect state changes
-        
-        # Improved particle and glow effects
-        self.max_particles = 50
-        self.glow_surfaces = {}  # Cache for glow surfaces
-        self.animation_style = config.AVATAR_ANIMATION_STYLE
-        
-        # Display elements
-        self.font = None
-        self.status_text = ""
-        self.status_alpha = 0  # For fade effect
 
-    def run(self):
-        """Main loop for the Pygame avatar display thread."""
+        # --- Pygame Specific ---
+        self.screen: Optional[pygame.Surface] = None
+        self.clock: Optional[pygame.time.Clock] = None
+        self.font: Optional[pygame.font.Font] = None
+        self.debug_font: Optional[pygame.font.Font] = None
+        self._pygame_initialized: bool = False
+        self._display_flags: int = 0
+
+        # --- Configuration ---
+        self.width: int = config.AVATAR_WINDOW_WIDTH
+        self.height: int = config.AVATAR_WINDOW_HEIGHT
+        self.center_x: int = self.width // 2
+        self.center_y: int = self.height // 2
+        self.fps: int = config.AVATAR_FPS
+        self.fullscreen: bool = config.AVATAR_FULLSCREEN
+        self.debug_overlay: bool = config.AVATAR_DEBUG_OVERLAY
+        self.show_status_text: bool = config.AVATAR_DISPLAY_STATUS_TEXT
+        self.animation_style: str = config.AVATAR_ANIMATION_STYLE
+
+        # Colors (convert from list in config if necessary)
+        self.bg_color: ColorTuple = tuple(config.AVATAR_BACKGROUND_COLOR) # type: ignore
+        self.colors: Dict[State, ColorTuple] = {
+            State.IDLE: tuple(config.AVATAR_IDLE_COLOR), # type: ignore
+            State.LISTENING: tuple(config.AVATAR_LISTENING_COLOR), # type: ignore
+            State.PROCESSING_STT: tuple(config.AVATAR_THINKING_COLOR), # type: ignore
+            State.THINKING: tuple(config.AVATAR_THINKING_COLOR), # type: ignore
+            State.SYNTHESIZING_TTS: tuple(config.AVATAR_SPEAKING_COLOR), # type: ignore
+            State.SPEAKING: tuple(config.AVATAR_SPEAKING_COLOR), # type: ignore
+            State.ERROR: tuple(config.AVATAR_ERROR_COLOR) # type: ignore
+        }
+        self.default_color: ColorTuple = self.colors[State.IDLE] # Fallback color
+
+        # Animation parameters
+        self.min_radius: int = config.AVATAR_MIN_RADIUS
+        self.max_radius_factor: float = config.AVATAR_MAX_RADIUS_FACTOR
+
+        # --- State & Data ---
+        self.current_amplitude: float = 0.0
+        self.amplitude_history: List[float] = []
+        self.history_max_length: int = max(1, self.fps // 3) # History based on FPS (e.g., 10 frames at 30fps)
+
+        # --- Animation Effects ---
+        self.particles: List[ParticleDict] = []
+        self.max_particles: int = 75 # Increased max particles
+        self.pulse_phase: float = 0.0
+        self.transition_effect: float = 0.0 # Controls flash on state change (0 to 1)
+        self.previous_state: Optional[State] = None
+        self.glow_surfaces: Dict[Any, pygame.Surface] = {} # Cache for glow surfaces
+        self.status_text: str = ""
+        self.status_alpha: int = 0 # For fade effect
+
+        logger.debug("AvatarDisplay initialized.")
+
+
+    def _init_pygame(self) -> bool:
+        """Initialize Pygame display, fonts, and clock."""
+        if self._pygame_initialized:
+            return True
+        logger.info("Initializing Pygame for Avatar Display...")
         try:
             pygame.init()
-            # Set display mode - consider flags like FULLSCREEN or NOFRAME for kiosk
-            display_flags = 0
-            if config.AVATAR_FULLSCREEN:
-                display_flags = pygame.FULLSCREEN
-                
-            self.screen = pygame.display.set_mode(
-                (config.AVATAR_WINDOW_WIDTH, config.AVATAR_WINDOW_HEIGHT),
-                display_flags
-            )
+            pygame.font.init() # Explicitly initialize font module
+
+            # Set display mode
+            self._display_flags = pygame.RESIZABLE # Start with resizable for flexibility
+            if self.fullscreen:
+                 self._display_flags = pygame.FULLSCREEN | pygame.SCALED # Use SCALED with FULLSCREEN
+                 logger.info("Pygame Fullscreen mode enabled.")
+
+            self.screen = pygame.display.set_mode((self.width, self.height), self._display_flags)
             pygame.display.set_caption("Project EchoCore Avatar")
+
             self.clock = pygame.time.Clock()
-            self.font = pygame.font.SysFont("Arial", 18)  # Initialize font for status text
-            logger.info("Pygame initialized.")
-            self.running = True
+
+            # Load fonts (handle potential errors)
+            try:
+                self.font = pygame.font.SysFont("Arial", 18)
+                self.debug_font = pygame.font.SysFont("Courier", 14)
+            except Exception as font_error:
+                 logger.warning(f"Failed to load system fonts, using default: {font_error}")
+                 self.font = pygame.font.Font(None, 24) # Pygame default font
+                 self.debug_font = pygame.font.Font(None, 18)
+
+
+            self._pygame_initialized = True
+            logger.info("Pygame initialized successfully.")
+            return True
+
         except pygame.error as e:
             logger.error(f"Error initializing Pygame: {e}")
-            logger.warning("Ensure display environment is set up (e.g., X11 or KMSDRM on RPi).")
-            self.state_manager.set_state(State.ERROR, error_message=f"Pygame initialization failed: {e}")
-            self.running = False
-            return # Exit thread if Pygame fails
+            logger.error("Ensure a display environment is available (e.g., X11 server or KMSDRM on RPi).")
+            # Set error state if Pygame fails critically
+            self.state_manager.set_state(State.ERROR, error_message=f"Pygame init failed: {e}")
+            return False
+        except Exception as e:
+            logger.exception(f"Unexpected error during Pygame initialization: {e}")
+            self.state_manager.set_state(State.ERROR, error_message=f"Unexpected Pygame init error: {e}")
+            return False
 
-        while self.running and not self.stop_event.is_set():
-            # --- Event Handling ---
-            for event in pygame.event.get():
-                if event.type == pygame.QUIT:
-                    self.running = False
-                    self.stop_event.set() # Signal other threads to stop
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_ESCAPE: # Allow exit with ESC key
-                         self.running = False
-                         self.stop_event.set()
+    def _update_amplitude(self) -> None:
+        """Get the latest amplitude value from the queue and update history."""
+        try:
+            # Process all available amplitude updates in the queue
+            while not self.avatar_queue.empty():
+                 amplitude = self.avatar_queue.get_nowait()
+                 # Clamp amplitude between 0.0 and 1.0
+                 self.current_amplitude = max(0.0, min(float(amplitude), 1.0))
 
-            # --- Get Amplitude ---
-            try:
-                # Get the latest amplitude value (non-blocking)
-                while not self.avatar_queue.empty():
-                    amplitude = self.avatar_queue.get_nowait()
-                    self.current_amplitude = amplitude
-                    
-                    # Add to history for smoother visualization
-                    self.amplitude_history.append(amplitude)
-                    if len(self.amplitude_history) > self.history_max_length:
-                        self.amplitude_history.pop(0)
-            except queue.Empty:
-                pass # Keep the last known amplitude if queue is empty
+                 # Add to history
+                 self.amplitude_history.append(self.current_amplitude)
+                 # Trim history
+                 if len(self.amplitude_history) > self.history_max_length:
+                     # More efficient trimming than pop(0)
+                     self.amplitude_history = self.amplitude_history[-self.history_max_length:]
 
-            # --- Get Current State ---
-            current_state = self.state_manager.get_state()
-            
-            # Check for state transition
-            if current_state != self.previous_state:
-                self.transition_effect = 1.0  # Start transition effect
-                self.previous_state = current_state
-                
-                # Update status text based on state
-                if current_state == State.IDLE:
-                    self.status_text = "Ready"
-                elif current_state == State.LISTENING:
-                    self.status_text = "Listening..."
-                elif current_state == State.PROCESSING_STT:
-                    self.status_text = "Processing speech..."
-                elif current_state == State.THINKING:
-                    self.status_text = "Thinking..."
-                elif current_state == State.SYNTHESIZING_TTS:
-                    self.status_text = "Generating response..."
-                elif current_state == State.SPEAKING:
-                    self.status_text = "Speaking..."
-                elif current_state == State.ERROR:
-                    self.status_text = "Error occurred"
-                
-                # Make status visible
-                self.status_alpha = 255
+        except queue.Empty:
+            # If queue is empty, gradually decrease amplitude towards 0? Or hold last?
+            # Let's hold the last known amplitude for now.
+            pass
+        except Exception as e:
+            logger.error(f"Error reading from avatar queue: {e}")
+            self.current_amplitude = 0.0 # Default to zero on error
 
-            # --- Drawing ---
-            self.screen.fill(config.AVATAR_BACKGROUND_COLOR)
-            self._draw_enhanced_avatar(current_state)
-            
-            # Draw status text if enabled
-            if config.AVATAR_DISPLAY_STATUS_TEXT:
-                self._draw_status_text()
-            
-            # Draw error message if in ERROR state
-            if current_state == State.ERROR:
-                self._draw_error_message()
-            
-            # Draw debug overlay if enabled
-            if config.AVATAR_DEBUG_OVERLAY:
-                self._draw_debug_overlay(current_state)
-                
-            pygame.display.flip()
 
-            # --- Update Effects ---
-            self._update_effects()
+    def _handle_input(self) -> None:
+        """Handle Pygame events like quit or key presses."""
+        if not self._pygame_initialized or self.screen is None: return
 
-            # --- Frame Rate Control ---
-            self.clock.tick(config.AVATAR_FPS)
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                logger.info("Pygame QUIT event received.")
+                self.stop_event.set() # Signal all threads to stop
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    logger.info("Escape key pressed.")
+                    self.stop_event.set()
+                elif event.key == pygame.K_f: # Toggle fullscreen example
+                     self.fullscreen = not self.fullscreen
+                     flags = pygame.FULLSCREEN | pygame.SCALED if self.fullscreen else pygame.RESIZABLE
+                     try:
+                          pygame.display.set_mode((self.width, self.height), flags)
+                          logger.info(f"Toggled fullscreen: {self.fullscreen}")
+                     except pygame.error as e:
+                          logger.error(f"Failed to toggle fullscreen: {e}")
 
-        self._cleanup()
+            elif event.type == pygame.VIDEORESIZE: # Handle window resize
+                 if not self.fullscreen:
+                      self.width = event.w
+                      self.height = event.h
+                      self.center_x = self.width // 2
+                      self.center_y = self.height // 2
+                      try:
+                          self.screen = pygame.display.set_mode((self.width, self.height), pygame.RESIZABLE)
+                          logger.info(f"Window resized to {self.width}x{self.height}")
+                      except pygame.error as e:
+                           logger.error(f"Failed to resize window: {e}")
 
-    def _draw_enhanced_avatar(self, state):
-        """Draws an enhanced avatar with animations based on state and amplitude."""
-        # Use the configured animation style
-        animation_style = config.AVATAR_ANIMATION_STYLE
-        
-        # Get screen center coordinates
-        center_x = config.AVATAR_WINDOW_WIDTH // 2
-        center_y = config.AVATAR_WINDOW_HEIGHT // 2
 
-        # Get smooth amplitude by averaging history
-        smooth_amplitude = 0.0
-        if self.amplitude_history:
-            smooth_amplitude = sum(self.amplitude_history) / len(self.amplitude_history)
+    def _update_state_and_effects(self) -> Tuple[State, ColorTuple, float]:
+        """Update internal state based on StateManager and manage transition effects."""
+        current_state = self.state_manager.get_state()
+        smooth_amplitude = sum(self.amplitude_history) / len(self.amplitude_history) if self.amplitude_history else 0.0
 
-        # Determine color based on state
-        color = config.AVATAR_IDLE_COLOR
-        if state == State.LISTENING:
-            color = config.AVATAR_LISTENING_COLOR
-        elif state == State.PROCESSING_STT or state == State.THINKING:
-             color = config.AVATAR_THINKING_COLOR
-        elif state == State.SYNTHESIZING_TTS or state == State.SPEAKING:
-            color = config.AVATAR_SPEAKING_COLOR
-        elif state == State.ERROR:
-            color = config.AVATAR_ERROR_COLOR
+        # --- State Transition Logic ---
+        if current_state != self.previous_state:
+            logger.debug(f"Avatar detected state change: {self.previous_state} -> {current_state}")
+            self.transition_effect = 1.0 # Start transition flash effect
+            self.previous_state = current_state
 
-        # Apply transition effect to color
+            # Update status text based on the new state
+            self.status_text = current_state.name.replace("_", " ").title() # Auto-format state name
+            if current_state == State.IDLE: self.status_text = "Ready"
+            elif current_state == State.LISTENING: self.status_text = "Listening..."
+            elif current_state == State.PROCESSING_STT: self.status_text = "Processing Speech..."
+            elif current_state == State.THINKING: self.status_text = "Thinking..."
+            elif current_state == State.SYNTHESIZING_TTS: self.status_text = "Generating Response..."
+            elif current_state == State.SPEAKING: self.status_text = "Speaking..."
+            elif current_state == State.ERROR: self.status_text = "Error Occurred"
+
+            self.status_alpha = 255 # Make status text fully visible on change
+
+        # --- Update Ongoing Effects ---
+        # Update pulse phase for idle animations etc.
+        self.pulse_phase = (self.pulse_phase + 0.05) % (2 * math.pi)
+
+        # Decay transition effect
         if self.transition_effect > 0:
-            # Create a brighter version of the color for the transition flash
-            bright_color = tuple(min(c + 100, 255) for c in color)
-            
-            # Interpolate between bright and normal color based on transition effect
-            color = tuple(int(bright_color[i] * self.transition_effect + color[i] * (1 - self.transition_effect)) 
-                          for i in range(3))
+            self.transition_effect = max(0.0, self.transition_effect - 0.05) # Linear decay
 
-        # Base radius calculation
-        radius = config.AVATAR_MIN_RADIUS
-        
-        if animation_style == "circle":
-            self._draw_circle_animation(center_x, center_y, radius, color, state, smooth_amplitude)
-        elif animation_style == "wave":
-            self._draw_wave_animation(center_x, center_y, radius, color, state, smooth_amplitude)
-        elif animation_style == "particle":
-            self._draw_particle_animation(center_x, center_y, radius, color, state, smooth_amplitude)
-        elif animation_style == "hologram":
-            self._draw_hologram_animation(center_x, center_y, radius, color, state, smooth_amplitude)
+        # Decay status text alpha (unless in certain states)
+        if self.status_alpha > 0 and current_state not in (State.LISTENING, State.SPEAKING, State.ERROR):
+             self.status_alpha = max(0, self.status_alpha - 2) # Slow fade out
+        elif current_state in (State.LISTENING, State.SPEAKING, State.ERROR):
+             self.status_alpha = 255 # Keep visible
+
+        # --- Determine Color ---
+        base_color = self.colors.get(current_state, self.default_color)
+
+        # Apply transition effect (flash brighter)
+        if self.transition_effect > 0:
+             # Interpolate towards a brighter version of the base color
+             bright_color = tuple(min(c + 100, 255) for c in base_color)
+             final_color = tuple(int(bright_color[i] * self.transition_effect + base_color[i] * (1.0 - self.transition_effect))
+                                 for i in range(3))
         else:
-            # Default to circle if animation style is not recognized
-            self._draw_circle_animation(center_x, center_y, radius, color, state, smooth_amplitude)
+            final_color = base_color
 
-    def _draw_circle_animation(self, center_x, center_y, base_radius, color, state, smooth_amplitude):
+        return current_state, final_color, smooth_amplitude
+
+
+    # --- Drawing Methods ---
+
+    def _draw_avatar(self, state: State, color: ColorTuple, amplitude: float) -> None:
+        """Calls the appropriate drawing function based on animation style."""
+        # Map style string to drawing method
+        draw_func_map = {
+            "circle": self._draw_circle_animation,
+            "wave": self._draw_wave_animation,
+            "particle": self._draw_particle_animation,
+            "hologram": self._draw_hologram_animation,
+        }
+        draw_function = draw_func_map.get(self.animation_style, self._draw_circle_animation) # Default to circle
+
+        # Call the selected drawing function
+        try:
+            draw_function(self.center_x, self.center_y, self.min_radius, color, state, amplitude)
+        except Exception as e:
+             logger.exception(f"Error during avatar drawing ({self.animation_style}): {e}")
+             # Optionally draw a simple fallback if drawing fails?
+             pygame.draw.circle(self.screen, self.colors[State.ERROR], (self.center_x, self.center_y), self.min_radius)
+
+    def _draw_circle_animation(self, cx: int, cy: int, base_radius: int, color: ColorTuple, state: State, amplitude: float) -> None:
         """Basic circle animation style."""
-        # Gentle pulsing in idle state
-        pulse = (math.sin(self.pulse_phase) + 1) / 2  # Value between 0 and 1
-        
-        # Adjust radius based on state and amplitude
-        if state == State.IDLE:
-            radius = base_radius + int(pulse * 10)
-        elif state == State.SPEAKING:
-            radius = base_radius + int(smooth_amplitude * (config.AVATAR_MAX_RADIUS_FACTOR * base_radius))
-            radius = max(base_radius, radius)
-        else:
-            radius = base_radius + 5
-        
+        pulse = (math.sin(self.pulse_phase) + 1) / 2 # 0 to 1
+        radius = base_radius
+        if state == State.SPEAKING:
+            radius += int(amplitude * (self.max_radius_factor * base_radius * 0.5)) # Scaled effect
+        elif state == State.IDLE:
+             radius += int(pulse * 5) # Gentle pulse
+
+        radius = max(base_radius // 2, radius) # Ensure minimum size
+
         # Draw main circle
-        pygame.draw.circle(self.screen, color, (center_x, center_y), radius)
-        
+        pygame.draw.circle(self.screen, color, (cx, cy), radius)
         # Draw simple glow ring
-        glow_radius = radius + 5
-        glow_surface = pygame.Surface((glow_radius*2, glow_radius*2), pygame.SRCALPHA)
-        pygame.draw.circle(glow_surface, color + (100,), (glow_radius, glow_radius), glow_radius)
-        self.screen.blit(glow_surface, (center_x - glow_radius, center_y - glow_radius))
+        self._draw_glow(cx, cy, radius + 5, color, 100)
 
-    def _draw_wave_animation(self, center_x, center_y, base_radius, color, state, smooth_amplitude):
+
+    def _draw_wave_animation(self, cx: int, cy: int, base_radius: int, color: ColorTuple, state: State, amplitude: float) -> None:
         """Wave-based animation with rings."""
-        # Adjust radius based on state and amplitude
+        pulse = (math.sin(self.pulse_phase) + 1) / 2
+        radius = base_radius + int(pulse * 5)
         if state == State.SPEAKING:
-            radius = base_radius + int(smooth_amplitude * (config.AVATAR_MAX_RADIUS_FACTOR * base_radius))
-            radius = max(base_radius, radius)
-        else:
-            pulse = (math.sin(self.pulse_phase) + 1) / 2  # Value between 0 and 1
-            radius = base_radius + int(pulse * 5)
-        
-        # Draw main circle
-        pygame.draw.circle(self.screen, color, (center_x, center_y), radius)
-        
-        # Draw wave rings based on state
-        if state == State.IDLE:
-            # Single subtle pulsing ring for idle
-            ring_radius = radius + int(pulse * 15)
-            ring_alpha = max(0, int(150 - pulse * 120))
-            
-            ring_surface = pygame.Surface((ring_radius*2, ring_radius*2), pygame.SRCALPHA)
-            pygame.draw.circle(ring_surface, color + (ring_alpha,), (ring_radius, ring_radius), ring_radius, 2)
-            self.screen.blit(ring_surface, (center_x - ring_radius, center_y - ring_radius))
-            
-        elif state == State.LISTENING:
-            # Multiple expanding rings for listening
-            num_rings = 3
+             radius += int(amplitude * 15) # Add amplitude effect
+        radius = max(base_radius // 2, radius)
+
+        pygame.draw.circle(self.screen, color, (cx, cy), radius)
+
+        num_rings = 3
+        max_ring_radius = base_radius * self.max_radius_factor * 0.8
+
+        if state == State.SPEAKING:
+            # Rings expand with amplitude
             for i in range(num_rings):
-                ring_phase = (self.pulse_phase + i * (math.pi / num_rings)) % (math.pi * 2)
-                ring_size = base_radius + int(abs(math.sin(ring_phase)) * base_radius * 3)
-                ring_alpha = int(150 * (1 - (ring_size / (base_radius * 4))))
-                
-                if ring_alpha > 0:
-                    ring_surface = pygame.Surface((ring_size*2, ring_size*2), pygame.SRCALPHA)
-                    pygame.draw.circle(ring_surface, color + (ring_alpha,), (ring_size, ring_size), ring_size, 2)
-                    self.screen.blit(ring_surface, (center_x - ring_size, center_y - ring_size))
-        
-        elif state == State.SPEAKING:
-            # Sound wave visualization rings
-            num_waves = 5
-            wave_spacing = 8
-            for i in range(num_waves):
-                wave_radius = radius + (i * wave_spacing)
-                wave_mod = int(smooth_amplitude * 10 * math.sin(i + self.pulse_phase))
-                wave_radius += wave_mod
-                wave_alpha = max(30, int(150 * (1 - (i / num_waves))))
-                
-                wave_surface = pygame.Surface((wave_radius*2, wave_radius*2), pygame.SRCALPHA)
-                pygame.draw.circle(wave_surface, color + (wave_alpha,), (wave_radius, wave_radius), wave_radius, 
-                                max(1, int(3 * (1 - (i / num_waves)))))
-                self.screen.blit(wave_surface, (center_x - wave_radius, center_y - wave_radius))
+                ring_rad = radius + int(amplitude * max_ring_radius * ((i + 1) / num_rings))
+                alpha = max(0, int(150 * (1 - amplitude) * (1 - i / num_rings)))
+                if alpha > 10:
+                    pygame.draw.circle(self.screen, color + (alpha,), (cx, cy), ring_rad, max(1, 3 - i))
+        elif state == State.LISTENING:
+             # Rings expand and fade cyclically
+             for i in range(num_rings):
+                 ring_phase = (self.pulse_phase * 1.5 + i * (math.pi / num_rings)) % (math.pi * 2)
+                 ring_rad = base_radius + int(abs(math.sin(ring_phase)) * max_ring_radius * 0.8)
+                 alpha = max(0, int(150 * (1 - abs(math.sin(ring_phase)))))
+                 if alpha > 10 and ring_rad > base_radius:
+                      pygame.draw.circle(self.screen, color + (alpha,), (cx, cy), ring_rad, 2)
+        else: # Idle, Thinking, etc.
+            # Single subtle pulsing ring
+            ring_rad = radius + int(pulse * 15)
+            alpha = max(0, int(100 - pulse * 80))
+            if alpha > 10:
+                 pygame.draw.circle(self.screen, color + (alpha,), (cx, cy), ring_rad, 1)
 
-    def _draw_particle_animation(self, center_x, center_y, base_radius, color, state, smooth_amplitude):
-        """Particle-based animation with improved alpha blending."""
-        # Core circle
+
+    def _draw_particle_animation(self, cx: int, cy: int, base_radius: int, color: ColorTuple, state: State, amplitude: float) -> None:
+        """Particle-based animation."""
+        if np is None: # Guard if numpy failed import
+             self._draw_circle_animation(cx, cy, base_radius, color, state, amplitude)
+             return
+
+        pulse = (math.sin(self.pulse_phase) + 1) / 2
+        radius = base_radius + int(pulse * 5)
         if state == State.SPEAKING:
-            radius = base_radius + int(smooth_amplitude * 20)
-        else:
-            pulse = (math.sin(self.pulse_phase) + 1) / 2
-            radius = base_radius + int(pulse * 5)
-        
-        # Create the main avatar surface with transparency
-        avatar_surface = pygame.Surface((config.AVATAR_WINDOW_WIDTH, config.AVATAR_WINDOW_HEIGHT), pygame.SRCALPHA)
-        
-        # Draw main circle on the avatar surface
-        pygame.draw.circle(avatar_surface, color + (230,), (center_x, center_y), radius)
-        
-        # Draw glow effect on the avatar surface
-        for i in range(3):
-            glow_radius = radius + (i * 5)
-            alpha = 120 - (i * 40)
-            pygame.draw.circle(avatar_surface, color + (alpha,), (center_x, center_y), glow_radius, 2)
-        
-        # Update and draw particles
-        self._update_particles(center_x, center_y, radius, color, state, smooth_amplitude)
-        
-        for particle in self.particles:
-            # Draw each particle with its own transparency
-            pygame.draw.circle(avatar_surface, particle["color"], 
-                              (particle["x"], particle["y"]), 
-                              particle["size"])
-        
-        # Blit the avatar surface to the screen
-        self.screen.blit(avatar_surface, (0, 0))
+             radius += int(amplitude * 20)
+        radius = max(base_radius // 2, radius)
 
-    def _update_particles(self, center_x, center_y, radius, color, state, smooth_amplitude):
+        # Draw core circle and glow
+        pygame.draw.circle(self.screen, color, (cx, cy), radius)
+        self._draw_glow(cx, cy, radius + 10, color, 150)
+
+        # Update and draw particles
+        self._update_particles(cx, cy, radius, color, state, amplitude)
+        for p in self.particles:
+            # Ensure alpha is valid before creating color tuple
+            alpha = max(0, min(255, int(p["alpha"])))
+            # Check if color already has alpha
+            p_color = p["color"][:3] + (alpha,) if len(p["color"]) == 4 else p["color"] + (alpha,)
+
+            # Draw particle using pygame.draw.circle for simplicity
+            # Using surfaces for each particle can be slow
+            try:
+                pygame.draw.circle(self.screen, p_color, (int(p["x"]), int(p["y"])), int(p["size"]))
+            except ValueError as e:
+                 logger.warning(f"Invalid color for particle draw: {p_color}, Error: {e}")
+            except TypeError as e:
+                 logger.warning(f"Invalid position/size for particle draw: x={p['x']}, y={p['y']}, size={p['size']}, Error: {e}")
+
+
+    def _update_particles(self, cx: int, cy: int, radius: int, color: ColorTuple, state: State, amplitude: float) -> None:
         """Update particle positions and properties for particle animation."""
+        dt = self.clock.get_time() / 1000.0 if self.clock else 0.016 # Delta time in seconds
+
         # Remove faded particles
         self.particles = [p for p in self.particles if p["alpha"] > 0]
-        
-        # Create new particles based on state
+
+        # Add new particles based on state
+        spawn_prob = 0.0
+        max_state_particles = 20
         if state == State.IDLE:
-            # Slow-moving orbital particles in idle
-            if len(self.particles) < 10 and random.random() < 0.05:
-                angle = random.random() * math.pi * 2
-                dist = radius * 2
-                self.particles.append({
-                    "x": center_x + math.cos(angle) * dist,
-                    "y": center_y + math.sin(angle) * dist,
-                    "size": random.randint(1, 3),
-                    "speed_x": math.cos(angle + math.pi/2) * 0.5,
-                    "speed_y": math.sin(angle + math.pi/2) * 0.5,
-                    "color": color + (150,),
-                    "alpha": 150,
-                    "decay": 0.2
-                })
-        
+            spawn_prob = 0.03
+            max_state_particles = 15
         elif state == State.LISTENING:
-            # Particles moving toward center during listening
-            if len(self.particles) < 20 and random.random() < 0.1:
-                angle = random.random() * math.pi * 2
-                dist = random.randint(radius * 3, radius * 5)
-                
-                self.particles.append({
-                    "x": center_x + math.cos(angle) * dist,
-                    "y": center_y + math.sin(angle) * dist,
-                    "size": random.randint(2, 4),
-                    "speed_x": -math.cos(angle) * 1.0,
-                    "speed_y": -math.sin(angle) * 1.0,
-                    "color": color + (180,),
-                    "alpha": 180,
-                    "decay": 0.5
-                })
-        
+            spawn_prob = 0.1
+            max_state_particles = 30
         elif state == State.THINKING:
-            # Orbiting particles during thinking
-            if len(self.particles) < 30:
-                angle = self.pulse_phase + random.random() * 0.2
-                dist = radius * 2 + random.randint(-5, 5)
-                
-                orbit_speed = 0.02
-                self.particles.append({
-                    "x": center_x + math.cos(angle) * dist,
-                    "y": center_y + math.sin(angle) * dist,
-                    "size": random.randint(2, 4),
-                    "speed_x": -math.sin(angle) * orbit_speed * dist,
-                    "speed_y": math.cos(angle) * orbit_speed * dist,
-                    "color": color + (200,),
-                    "alpha": 200,
-                    "decay": 1.0
-                })
-        
+            spawn_prob = 0.08
+            max_state_particles = 40
         elif state == State.SPEAKING:
-            # Particles emitting outward based on amplitude
-            if len(self.particles) < self.max_particles and random.random() < 0.1 + (smooth_amplitude * 0.3):
-                angle = random.random() * math.pi * 2
-                dist = radius * 1.1
-                speed = 0.5 + smooth_amplitude * 2
-                
-                self.particles.append({
-                    "x": center_x + math.cos(angle) * dist,
-                    "y": center_y + math.sin(angle) * dist,
-                    "size": random.randint(1, 3) + int(smooth_amplitude * 3),
-                    "speed_x": math.cos(angle) * speed,
-                    "speed_y": math.sin(angle) * speed,
-                    "color": color + (180,),
-                    "alpha": 180,
-                    "decay": 1.0 + smooth_amplitude * 2
-                })
-        
+             spawn_prob = 0.1 + (amplitude * 0.4) # Spawn more with higher amplitude
+             max_state_particles = self.max_particles
+
+        if len(self.particles) < max_state_particles and random.random() < spawn_prob:
+            angle = random.uniform(0, 2 * math.pi)
+            dist = radius * random.uniform(1.0, 1.5)
+            speed = random.uniform(10, 30)
+            size = random.uniform(1, 3)
+            alpha = random.uniform(150, 220)
+            decay = random.uniform(50, 100) # Alpha decay per second
+
+            px = cx + math.cos(angle) * dist
+            py = cy + math.sin(angle) * dist
+            vx = math.cos(angle) * speed
+            vy = math.sin(angle) * speed
+
+            if state == State.LISTENING:
+                # Move towards center
+                 vx *= -1.5
+                 vy *= -1.5
+                 decay *= 1.5
+            elif state == State.THINKING:
+                 # Orbiting motion (simple tangential velocity)
+                 tangent_angle = angle + math.pi / 2
+                 orbit_speed = random.uniform(20, 40)
+                 vx = math.cos(tangent_angle) * orbit_speed
+                 vy = math.sin(tangent_angle) * orbit_speed
+                 decay *= 0.8 # Live longer
+            elif state == State.SPEAKING:
+                 # Burst outwards, faster with amplitude
+                 speed += amplitude * 50
+                 vx = math.cos(angle) * speed
+                 vy = math.sin(angle) * speed
+                 size += amplitude * 2
+                 decay += amplitude * 50
+
+
+            self.particles.append({
+                "x": px, "y": py, "vx": vx, "vy": vy,
+                "size": size, "color": color, "alpha": alpha, "decay": decay
+            })
+
+
         # Update existing particles
-        for particle in self.particles:
-            # Move particle
-            particle["x"] += particle["speed_x"]
-            particle["y"] += particle["speed_y"]
-            
-            # Fade particle
-            particle["alpha"] -= particle["decay"]
-            
-            # Update color with new alpha
-            particle_color = list(particle["color"])
-            particle_color[3] = max(0, int(particle["alpha"]))
-            particle["color"] = tuple(particle_color)
+        for p in self.particles:
+             p["x"] += p["vx"] * dt
+             p["y"] += p["vy"] * dt
+             p["alpha"] -= p["decay"] * dt
 
-    def _draw_hologram_animation(self, center_x, center_y, base_radius, color, state, smooth_amplitude):
-        """Hologram-style animation with scan lines and glitches."""
-        # Create surface with alpha channel
-        hologram_surface = pygame.Surface((config.AVATAR_WINDOW_WIDTH, config.AVATAR_WINDOW_HEIGHT), pygame.SRCALPHA)
-        
-        # Adjust radius based on state and amplitude
+             # Optional: Add drag/friction
+             # p["vx"] *= 0.98
+             # p["vy"] *= 0.98
+
+             # Optional: Bounce off edges (crude)
+             # if not (0 < p["x"] < self.width): p["vx"] *= -1
+             # if not (0 < p["y"] < self.height): p["vy"] *= -1
+
+
+    def _draw_hologram_animation(self, cx: int, cy: int, base_radius: int, color: ColorTuple, state: State, amplitude: float) -> None:
+        """Hologram-style animation with scan lines and effects."""
+        if np is None: # Guard if numpy failed import
+             self._draw_circle_animation(cx, cy, base_radius, color, state, amplitude)
+             return
+
+        pulse = (math.sin(self.pulse_phase) + 1) / 2
+        radius = base_radius + int(pulse * 8)
         if state == State.SPEAKING:
-            radius = base_radius + int(smooth_amplitude * (config.AVATAR_MAX_RADIUS_FACTOR * base_radius))
-            radius = max(base_radius, radius)
-        else:
-            pulse = (math.sin(self.pulse_phase) + 1) / 2
-            radius = base_radius + int(pulse * 8)
-        
-        # Draw main circle with fading edge
-        for i in range(radius, radius-10, -1):
-            if i <= 0:
-                break
-            # Fade transparency toward edge
-            alpha = min(255, int(230 * (i/radius)))
-            pygame.draw.circle(hologram_surface, color + (alpha,), (center_x, center_y), i)
-        
-        # Draw holographic scan lines
-        scan_line_count = 20
-        scan_line_height = config.AVATAR_WINDOW_HEIGHT // scan_line_count
-        scan_line_alpha = 30
-        
-        # Move scan line up and down
-        scan_offset = int(math.sin(self.pulse_phase * 0.5) * 10)
-        
-        for i in range(scan_line_count):
-            y_pos = i * scan_line_height + scan_offset
-            # Skip lines that would be outside the window
-            if y_pos < 0 or y_pos >= config.AVATAR_WINDOW_HEIGHT:
-                continue
-                
-            # Draw scan line with alpha blending
-            scan_line = pygame.Surface((config.AVATAR_WINDOW_WIDTH, 1), pygame.SRCALPHA)
-            scan_line.fill((*color, scan_line_alpha))
-            hologram_surface.blit(scan_line, (0, y_pos))
-        
-        # Add random glitches during state transitions or speaking
-        if self.transition_effect > 0 or state == State.SPEAKING:
-            glitch_count = 3 if self.transition_effect > 0 else int(smooth_amplitude * 5)
-            for _ in range(glitch_count):
-                # Create random horizontal glitch line
-                glitch_y = random.randint(center_y - radius * 2, center_y + radius * 2)
-                glitch_width = random.randint(10, 50)
-                glitch_x = random.randint(center_x - radius, center_x + radius)
-                
-                glitch = pygame.Surface((glitch_width, 2), pygame.SRCALPHA)
-                glitch_alpha = random.randint(100, 200)
-                glitch.fill((*color, glitch_alpha))
-                hologram_surface.blit(glitch, (glitch_x, glitch_y))
-        
-        # Draw hexagonal grid pattern for holographic effect
-        hex_size = 10
-        hex_alpha = 40
-        hex_offset_x = center_x % hex_size
-        hex_offset_y = center_y % hex_size
-        
-        # Only draw hexagons within a certain distance from center
-        max_hex_dist = radius * 2.5
-        
-        for x in range(-int(max_hex_dist), int(max_hex_dist), hex_size):
-            for y in range(-int(max_hex_dist), int(max_hex_dist), hex_size):
-                # Offset every other row
-                row_offset = (hex_size // 2) if (y // hex_size) % 2 == 0 else 0
-                hex_x = center_x + x + row_offset
-                hex_y = center_y + y
-                
-                # Calculate distance from center
-                dist = math.sqrt((hex_x - center_x)**2 + (hex_y - center_y)**2)
-                if dist <= max_hex_dist:
-                    # Make hexes closer to edge more transparent
-                    edge_factor = 1.0 - (dist / max_hex_dist)
-                    hex_alpha_adjusted = int(hex_alpha * edge_factor)
-                    
-                    if hex_alpha_adjusted > 5:  # Only draw visible hexes
-                        # Draw a small dot at hex grid points
-                        pygame.draw.circle(hologram_surface, (*color, hex_alpha_adjusted), 
-                                          (hex_x, hex_y), 1)
-        
-        # Draw outer rings
-        ring_count = 2
-        for i in range(ring_count):
-            ring_radius = radius * (1.5 + (i * 0.5))
-            ring_width = 1
-            ring_alpha = int(100 * (1 - (i / ring_count)))
-            
-            # Add some variation based on pulse
-            ring_variation = int(math.sin(self.pulse_phase + i) * 5)
-            ring_radius += ring_variation
-            
-            pygame.draw.circle(hologram_surface, (*color, ring_alpha), 
-                              (center_x, center_y), ring_radius, ring_width)
-        
-        # Add small orbiting dots for hologram tech feel
-        orbit_count = 8
-        for i in range(orbit_count):
-            angle = self.pulse_phase + (i * (2 * math.pi / orbit_count))
-            orbit_dist = radius * 1.2
-            orbit_x = center_x + int(math.cos(angle) * orbit_dist)
-            orbit_y = center_y + int(math.sin(angle) * orbit_dist)
-            
-            pygame.draw.circle(hologram_surface, (*color, 160), (orbit_x, orbit_y), 2)
-        
-        # Finally, blit the hologram surface to the screen
-        self.screen.blit(hologram_surface, (0, 0))
+             radius += int(amplitude * 25)
+        radius = max(base_radius, radius) # Ensure minimum size
 
-    def _draw_status_text(self):
+        # Create a dedicated surface for the hologram effect for better alpha blending
+        holo_surface = pygame.Surface((self.width, self.height), pygame.SRCALPHA)
+
+        # Draw core circle with fading edge
+        steps = 10
+        for i in range(steps):
+            r = radius * (1 - i / steps)
+            alpha = int(200 * (1 - i / steps)**2)
+            if r > 0 and alpha > 0:
+                 pygame.draw.circle(holo_surface, color + (alpha,), (cx, cy), int(r))
+
+
+        # Scan lines effect
+        num_scan_lines = 30
+        line_height = 2
+        scan_speed = 150 # Pixels per second
+        scan_pos = (time.monotonic() * scan_speed) % (self.height + line_height * num_scan_lines) # Loop position
+        for i in range(num_scan_lines):
+             y = (scan_pos - i * (self.height / num_scan_lines)) % self.height
+             alpha = int(50 * (1 - abs(cy - y) / (self.height / 2))**2) # Fade near edges
+             alpha = max(0, min(50, alpha))
+             if alpha > 5:
+                 pygame.draw.rect(holo_surface, color + (alpha,), pygame.Rect(0, int(y), self.width, line_height))
+
+        # Glitches (more frequent when speaking or transitioning)
+        glitch_prob = 0.01 + (amplitude * 0.1) if state == State.SPEAKING else 0.01
+        if self.transition_effect > 0.5: glitch_prob += 0.1
+
+        if random.random() < glitch_prob:
+             num_glitches = random.randint(1, 5)
+             for _ in range(num_glitches):
+                 glitch_y = random.randint(0, self.height - 2)
+                 glitch_x = random.randint(0, self.width // 2)
+                 glitch_w = random.randint(self.width // 4, self.width // 2)
+                 glitch_h = random.randint(1, 3)
+                 glitch_alpha = random.randint(80, 150)
+                 try:
+                     pygame.draw.rect(holo_surface, color + (glitch_alpha,), pygame.Rect(glitch_x, glitch_y, glitch_w, glitch_h))
+                 except ValueError as e:
+                     logger.warning(f"Invalid color for glitch draw: {color + (glitch_alpha,)}, Error: {e}")
+
+
+        # Orbiting elements (simple dots)
+        num_orbiters = 5
+        orbit_radius = radius * 1.3
+        for i in range(num_orbiters):
+             angle = self.pulse_phase * 0.8 + i * (2 * math.pi / num_orbiters)
+             ox = cx + int(math.cos(angle) * orbit_radius)
+             oy = cy + int(math.sin(angle) * orbit_radius)
+             pygame.draw.circle(holo_surface, color + (180,), (ox, oy), 2)
+
+        # Blit the complete hologram surface onto the main screen
+        self.screen.blit(holo_surface, (0, 0))
+
+
+    def _draw_glow(self, cx: int, cy: int, radius: int, color: ColorTuple, base_alpha: int) -> None:
+        """Draws a simple glow effect around a center point."""
+        if radius <= 0 or base_alpha <= 0: return
+        try:
+            # Use integer radius for surface creation
+            radius_int = max(1, int(radius))
+            # Create a surface slightly larger than the glow radius
+            surface_size = radius_int * 2
+            glow_surface = pygame.Surface((surface_size, surface_size), pygame.SRCALPHA)
+
+            # Draw concentric circles with decreasing alpha
+            steps = 5
+            for i in range(steps):
+                r = radius_int * (1 - i / steps)
+                alpha = int(base_alpha * (1 - i / steps)**2) # Exponential fade
+                if r > 0 and alpha > 0:
+                    # Ensure alpha is within valid range 0-255
+                    valid_alpha = max(0, min(255, alpha))
+                    pygame.draw.circle(glow_surface, color + (valid_alpha,), (radius_int, radius_int), int(r))
+
+            # Blit the glow surface centered at (cx, cy)
+            self.screen.blit(glow_surface, (cx - radius_int, cy - radius_int))
+        except (pygame.error, ValueError, OverflowError) as e:
+             logger.warning(f"Error drawing glow effect (radius={radius}, alpha={base_alpha}): {e}")
+
+
+    def _draw_status_text(self) -> None:
         """Draw the current status text with fade effect."""
-        if self.status_text and self.status_alpha > 0:
-            text_surface = self.font.render(self.status_text, True, (255, 255, 255, self.status_alpha))
-            text_rect = text_surface.get_rect(center=(config.AVATAR_WINDOW_WIDTH // 2, config.AVATAR_WINDOW_HEIGHT - 30))
-            
-            # Create a surface with alpha channel for text
-            text_surface_alpha = pygame.Surface(text_surface.get_size(), pygame.SRCALPHA)
-            text_surface_alpha.fill((255, 255, 255, self.status_alpha))
-            text_surface.blit(text_surface_alpha, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
-            
-            self.screen.blit(text_surface, text_rect)
-
-    def _draw_error_message(self):
-        """Draw the current error message when in ERROR state."""
-        if not self.state_manager.is_state(State.ERROR):
+        if not self.show_status_text or not self.status_text or self.status_alpha <= 0 or self.font is None:
             return
-            
+
+        try:
+            # Render text with current alpha
+            # Pygame fonts don't handle alpha directly in render, need surface trick
+            text_surface = self.font.render(self.status_text, True, (255, 255, 255)) # Render white
+            text_surface.set_alpha(self.status_alpha) # Set alpha on the surface
+
+            text_rect = text_surface.get_rect(center=(self.center_x, self.height - 30)) # Position near bottom center
+            self.screen.blit(text_surface, text_rect)
+        except Exception as e:
+            logger.error(f"Error rendering status text: {e}")
+
+
+    def _draw_error_message(self) -> None:
+        """Draw the stored error message when in ERROR state."""
+        if not self.state_manager.is_state(State.ERROR) or self.font is None:
+            return
+
         error_message = self.state_manager.get_error_message()
         if not error_message:
-            return
-            
-        # Create text surfaces for multiline error message
-        max_line_width = config.AVATAR_WINDOW_WIDTH - 40  # Padding
-        lines = []
-        
-        # Split error message into lines that fit the width
-        words = error_message.split()
-        current_line = ""
-        
-        for word in words:
-            test_line = current_line + " " + word if current_line else word
-            test_surface = self.font.render(test_line, True, (255, 255, 255))
-            
-            if test_surface.get_width() <= max_line_width:
-                current_line = test_line
-            else:
-                if current_line:
-                    lines.append(current_line)
-                current_line = word
-                
-        if current_line:
-            lines.append(current_line)
-        
-        # Render each line
-        y_pos = config.AVATAR_WINDOW_HEIGHT - (len(lines) * 25) - 40
-        for line in lines:
-            text_surface = self.font.render(line, True, (255, 255, 255))
-            text_rect = text_surface.get_rect(center=(config.AVATAR_WINDOW_WIDTH // 2, y_pos))
+            error_message = "Unknown Error" # Default message if none provided
+
+        try:
+            # Simple red text display for error
+            error_color = self.colors[State.ERROR]
+            text_surface = self.font.render(f"ERROR: {error_message}", True, error_color)
+            # Position error message (e.g., below status text or centered)
+            text_rect = text_surface.get_rect(center=(self.center_x, self.height - 50))
             self.screen.blit(text_surface, text_rect)
-            y_pos += 25
+        except Exception as e:
+            logger.error(f"Error rendering error message: {e}")
 
-    def _draw_debug_overlay(self, current_state):
-        """Draw debug information overlay when enabled in config."""
-        if not config.AVATAR_DEBUG_OVERLAY:
+
+    def _draw_debug_overlay(self, state: State, amplitude: float) -> None:
+        """Draw debug information overlay."""
+        if not self.debug_overlay or self.debug_font is None or self.clock is None:
             return
-            
-        # Create a semi-transparent background for debug info
-        debug_surface = pygame.Surface((300, 100), pygame.SRCALPHA)
-        pygame.draw.rect(debug_surface, (0, 0, 0, 180), pygame.Rect(0, 0, 300, 100))
-        
-        # Add debug text lines
-        debug_font = pygame.font.SysFont("Courier", 14)
-        
-        # State info
-        state_text = debug_font.render(f"State: {current_state.name}", True, (255, 255, 255))
-        debug_surface.blit(state_text, (10, 10))
-        
-        # Amplitude info
-        amp_value = 0.0
-        if self.amplitude_history:
-            amp_value = sum(self.amplitude_history) / len(self.amplitude_history)
-        amp_text = debug_font.render(f"Amplitude: {amp_value:.4f}", True, (255, 255, 255))
-        debug_surface.blit(amp_text, (10, 30))
-        
-        # FPS info
-        fps = self.clock.get_fps()
-        fps_text = debug_font.render(f"FPS: {fps:.1f}", True, (255, 255, 255))
-        debug_surface.blit(fps_text, (10, 50))
-        
-        # History length
-        history_text = debug_font.render(f"History: {len(self.amplitude_history)}/{self.history_max_length}", True, (255, 255, 255))
-        debug_surface.blit(history_text, (10, 70))
-        
-        # Blit the debug overlay onto the main screen
-        self.screen.blit(debug_surface, (10, 10))
 
-    def _get_glow_surface(self, radius, color, alpha):
-        """Get a cached glow surface or create a new one."""
-        # Create a unique key for this glow surface
-        key = (radius, color, alpha)
-        
-        # Return cached surface if it exists
-        if key in self.glow_surfaces:
-            return self.glow_surfaces[key]
-        
-        # Create new surface
-        surface_size = radius * 2
-        surface = pygame.Surface((surface_size, surface_size), pygame.SRCALPHA)
-        
-        # Create radial gradient
-        center = radius
-        for i in range(radius, 0, -1):
-            # Calculate alpha gradient from center to edge
-            current_alpha = int(alpha * (i / radius))
-            pygame.draw.circle(surface, color + (current_alpha,), (center, center), i)
-        
-        # Cache the surface
-        self.glow_surfaces[key] = surface
-        return surface
+        try:
+            # Use a list of lines for easy rendering
+            lines = [
+                f"State: {state.name}",
+                f"Amplitude: {amplitude:.4f}",
+                f"FPS: {self.clock.get_fps():.1f}",
+                f"History: {len(self.amplitude_history)}/{self.history_max_length}",
+                f"Particles: {len(self.particles)}",
+                f"Style: {self.animation_style}",
+            ]
 
-    def _update_effects(self):
-        """Update animation effects."""
-        # Update pulse phase
-        self.pulse_phase += 0.05
-        if self.pulse_phase > math.pi * 2:
-            self.pulse_phase -= math.pi * 2
-        
-        # Update transition effect
-        if self.transition_effect > 0:
-            self.transition_effect -= 0.05
-            if self.transition_effect < 0:
-                self.transition_effect = 0
-            
-        # Update status text fade
-        if self.status_alpha > 0:
-            self.status_alpha -= 1
-            if self.state_manager.is_state(State.LISTENING) or self.state_manager.is_state(State.SPEAKING):
-                # Keep text visible for these states
-                self.status_alpha = max(self.status_alpha, 180)
-    
-        # Clean up glow surface cache if it gets too large
-        if len(self.glow_surfaces) > 100:  # Maximum number of cached surfaces
-            # Keep only the 50 most recently used surfaces
-            self.glow_surfaces = {k: self.glow_surfaces[k] for k in list(self.glow_surfaces.keys())[:50]}
+            y_pos = 10
+            for i, line in enumerate(lines):
+                text_surface = self.debug_font.render(line, True, (200, 200, 200)) # Light gray text
+                self.screen.blit(text_surface, (10, y_pos + i * 18))
 
-    # Make sure to import random at the top of the file
-    import random
+        except Exception as e:
+             logger.error(f"Error rendering debug overlay: {e}")
 
-    # Also, update the cleanup method to clean up the glow surfaces cache
-    def _cleanup(self):
+    # --- Main Loop ---
+    def run(self) -> None:
+        """Main loop for the Pygame avatar display thread."""
+        if not self._init_pygame():
+            logger.error("AvatarDisplay thread exiting due to Pygame initialization failure.")
+            self._cleanup()
+            return # Stop thread if Pygame init fails
+
+        logger.info("AvatarDisplay thread started.")
+        while not self.stop_event.is_set():
+            # --- Input Handling ---
+            self._handle_input()
+
+            # --- Data Update ---
+            self._update_amplitude()
+
+            # --- State Update & Effects ---
+            current_state, current_color, smooth_amplitude = self._update_state_and_effects()
+
+            # --- Drawing ---
+            if self.screen:
+                try:
+                    # 1. Fill background
+                    self.screen.fill(self.bg_color)
+
+                    # 2. Draw avatar based on style
+                    self._draw_avatar(current_state, current_color, smooth_amplitude)
+
+                    # 3. Draw status text (if enabled and visible)
+                    self._draw_status_text()
+
+                    # 4. Draw error message (if in error state)
+                    self._draw_error_message()
+
+                    # 5. Draw debug overlay (if enabled)
+                    if self.debug_overlay:
+                        self._draw_debug_overlay(current_state, smooth_amplitude)
+
+                    # 6. Update the display
+                    pygame.display.flip()
+
+                except pygame.error as e:
+                     logger.error(f"Pygame error during drawing loop: {e}")
+                     # Consider attempting to recover or just logging
+                except Exception as e:
+                     logger.exception(f"Unexpected error during drawing loop: {e}")
+                     # Maybe set error state? Depends if drawing errors are critical.
+
+
+            # --- Frame Rate Control ---
+            if self.clock:
+                self.clock.tick(self.fps)
+            else:
+                 time.sleep(1.0 / self.fps if self.fps > 0 else 0.1) # Fallback sleep
+
+
+        logger.info("AvatarDisplay thread stopping...")
+        self._cleanup()
+        logger.info("AvatarDisplay thread finished.")
+
+    def _cleanup(self) -> None:
         """Clean up Pygame resources."""
-        logger.info("Cleaning up Avatar Display...")
-        # Clear glow surfaces cache
+        logger.info("Cleaning up AvatarDisplay resources...")
+        # Clear caches if needed (e.g., glow surfaces)
         self.glow_surfaces.clear()
-        pygame.quit()
+        # Quit Pygame modules
+        if self._pygame_initialized:
+             pygame.font.quit()
+             pygame.quit()
+             self._pygame_initialized = False
+             logger.info("Pygame quit.")
