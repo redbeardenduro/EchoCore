@@ -21,6 +21,7 @@ from llm_handler import LLMHandler
 from tts_synthesizer import TTSSynthesizer
 from audio_output import AudioOutputHandler
 from avatar_display import AvatarDisplay
+from web_interface import WebInterfaceThread  # Add this import
 
 # --- Setup Logging ---
 logging.basicConfig(
@@ -134,6 +135,12 @@ def main():
         audio_output = AudioOutputHandler(tts_queue, avatar_queue, state_manager, stop_event)
         avatar_display = AvatarDisplay(avatar_queue, state_manager, stop_event)
 
+        # Web interface (optional, based on config)
+        web_interface = None
+        if config.WEB_INTERFACE_ENABLED:
+            logger.info("Initializing web interface...")
+            web_interface = WebInterfaceThread(state_manager, llm_handler, stop_event)
+
         threads = [
             audio_input,
             stt_processor,
@@ -142,6 +149,10 @@ def main():
             audio_output,
             avatar_display
         ]
+
+        # Add web interface thread if enabled
+        if web_interface:
+            threads.append(web_interface)
 
         # --- Start Threads ---
         logger.info("Starting threads...")
