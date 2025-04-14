@@ -32,18 +32,24 @@ class LLMHandler(threading.Thread):
         
         # Conversation history for context
         self.conversation_history = [
-            {"role": "system", "content": "You are a helpful assistant named Echo. Keep your responses concise and friendly. You are running on a Raspberry Pi."}
+            {"role": "system", "content": config.LLM_SYSTEM_PROMPT}
         ]
-        self.max_history_length = 10  # Maximum number of message exchanges to store
+        self.max_history_length = config.LLM_MAX_CONVERSATION_TURNS
         
+        # Initialize client
+        self._init_client()
+
+    def _init_client(self):
+        """Initialize the OpenAI client."""
         if config.OPENAI_API_KEY:
             try:
                 self.client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=config.LLM_TIMEOUT)
                 logger.info("OpenAI client initialized.")
+                self.online_mode = True
             except AuthenticationError:
-                 logger.error("ERROR: OpenAI Authentication Failed. Check API Key.")
-                 self.state_manager.set_state(State.ERROR)
-                 self.online_mode = False
+                logger.error("ERROR: OpenAI Authentication Failed. Check API Key.")
+                self.state_manager.set_state(State.ERROR)
+                self.online_mode = False
             except Exception as e:
                 logger.error(f"Error initializing OpenAI client: {e}")
                 self.state_manager.set_state(State.ERROR)
@@ -52,8 +58,8 @@ class LLMHandler(threading.Thread):
             logger.warning("Warning: OPENAI_API_KEY not found. LLM will operate in offline mode only.")
             self.online_mode = False
             if not config.LLM_OFFLINE_FALLBACK_ENABLED:
-                 logger.error("ERROR: Offline fallback is disabled, and no API key provided. LLM cannot function.")
-                 self.state_manager.set_state(State.ERROR)
+                logger.error("ERROR: Offline fallback is disabled, and no API key provided. LLM cannot function.")
+                self.state_manager.set_state(State.ERROR)
 
     def _attempt_reconnect(self):
         """Try to reconnect to OpenAI API if offline."""
@@ -64,16 +70,9 @@ class LLMHandler(threading.Thread):
         logger.info("Attempting to reconnect to OpenAI API...")
         self.reconnect_attempt_time = current_time
         
-        if config.OPENAI_API_KEY:
-            try:
-                self.client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=config.LLM_TIMEOUT)
-                logger.info("OpenAI client reconnected successfully.")
-                self.online_mode = True
-                return True
-            except Exception as e:
-                logger.error(f"Failed to reconnect to OpenAI API: {e}")
-        
-        return False
+        # Use the initialization method for reconnection
+        self._init_client()
+        return self.online_mode
 
     def _manage_conversation_history(self, user_message, assistant_response):
         """Add new messages to conversation history and trim if needed."""
@@ -120,7 +119,9 @@ class LLMHandler(threading.Thread):
                             # Send to OpenAI with conversation history for context
                             completion = self.client.chat.completions.create(
                                 model=config.LLM_MODEL,
-                                messages=messages
+                                messages=messages,
+                                temperature=config.LLM_TEMPERATURE,
+                                max_tokens=config.LLM_MAX_TOKENS
                             )
                             response_text = completion.choices[0].message.content
                             logger.info(f"LLM Handler: Received response from OpenAI.")
@@ -185,7 +186,7 @@ class LLMHandler(threading.Thread):
         """Reset the conversation history to initial state."""
         system_message = self.conversation_history[0] if self.conversation_history else {
             "role": "system", 
-            "content": "You are a helpful assistant named Echo. Keep your responses concise and friendly. You are running on a Raspberry Pi."
+            "content": config.LLM_SYSTEM_PROMPT
         }
         self.conversation_history = [system_message]
         logger.info("Conversation history has been reset.")
