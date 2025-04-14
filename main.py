@@ -72,6 +72,46 @@ def check_component_health():
         return False
     return True
 
+def check_thread_liveness(threads):
+    """
+    Check if all threads are alive and attempt recovery if needed.
+    Returns a tuple (all_alive, dead_thread_names).
+    """
+    all_alive = True
+    dead_thread_names = []
+    
+    for thread in threads:
+        if not thread.is_alive():
+            thread_name = thread.__class__.__name__
+            all_alive = False
+            dead_thread_names.append(thread_name)
+            logger.error(f"Thread {thread_name} is not alive!")
+    
+    return all_alive, dead_thread_names
+
+def attempt_thread_recovery(dead_thread_names, threads):
+    """
+    Attempt to recover from dead threads. This is a basic implementation
+    that currently just logs the issue and sets error state.
+    In a more advanced version, this could restart specific threads.
+    """
+    logger.warning(f"The following threads have died: {', '.join(dead_thread_names)}")
+    logger.warning("Setting ERROR state and initiating recovery...")
+    
+    # Set error state with informative message
+    state_manager.set_state(State.ERROR, 
+                           error_message=f"Thread failure detected: {', '.join(dead_thread_names)}")
+    
+    # Clear queues to prevent backlog during recovery
+    clear_queues()
+    
+    # Note: Actual thread restarting would be more complex and depends on your architecture
+    # For now, we'll just recommend a manual restart
+    logger.error("Thread recovery is limited - a manual restart may be required.")
+    
+    # Return False to indicate recovery wasn't fully successful
+    return False
+
 def main():
     """Initialize and start all application threads."""
     logger.info("--- Project EchoCore Starting ---")
@@ -110,17 +150,47 @@ def main():
 
         # --- Main Loop (Keep main thread alive) ---
         logger.info("Application running. Press Ctrl+C to exit.")
-        health_check_interval = 30  # seconds
+        health_check_interval = config.HEALTH_CHECK_INTERVAL  # Seconds
         last_health_check = time.time()
         
+        # Thread liveness check setup
+        thread_check_interval = 10  # Seconds (check thread liveness every 10 seconds)
+        last_thread_check = time.time()
+        recovery_attempts = 0
+        max_recovery_attempts = config.RECOVERY_ATTEMPTS
+        
         while not stop_event.is_set():
+            current_time = time.time()
+            
             # Periodically check system health
-            if time.time() - last_health_check > health_check_interval:
+            if current_time - last_health_check > health_check_interval:
                 check_component_health()
-                last_health_check = time.time()
+                last_health_check = current_time
+            
+            # Periodically check thread liveness
+            if current_time - last_thread_check > thread_check_interval:
+                logger.debug("Performing thread liveness check...")
+                all_alive, dead_thread_names = check_thread_liveness(threads)
+                
+                if not all_alive:
+                    recovery_attempts += 1
+                    logger.warning(f"Thread failure detected! Recovery attempt {recovery_attempts}/{max_recovery_attempts}")
+                    
+                    if recovery_attempts <= max_recovery_attempts:
+                        recovery_success = attempt_thread_recovery(dead_thread_names, threads)
+                        if recovery_success:
+                            logger.info("Thread recovery successful")
+                            recovery_attempts = 0
+                    else:
+                        logger.error(f"Maximum recovery attempts ({max_recovery_attempts}) reached.")
+                        logger.error("System is in an unrecoverable state. Manual restart required.")
+                        # In a production system, you might want to trigger a full system restart here
+                        # or implement a more advanced recovery mechanism
+                
+                last_thread_check = current_time
                 
             # Main thread sleeps to reduce CPU usage
-            time.sleep(1)
+            time.sleep(0.5)  # More responsive sleep interval
 
     except Exception as e:
         logger.exception(f"FATAL ERROR during initialization or main loop: {e}")
