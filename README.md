@@ -9,12 +9,16 @@ Project EchoCore is a self-contained, AI-powered personal assistant terminal ins
 
 This enhanced version introduces improvements to the original implementation including:
 - Better error handling and recovery mechanisms
-- Enhanced visual avatar with animations
+- Enhanced visual avatar with sophisticated animations
 - Audio feedback cues for improved user experience
 - Conversation history for context-aware interactions
 - Improved configuration options and user customization
 - Automatic reconnection for cloud services
 - Flexible logging with rotation
+- Thread monitoring with watchdog functionality
+- Web-based configuration interface
+- Improved particle and glow layering in avatar display
+- Auto-download options for required models
 
 ## Features
 
@@ -30,6 +34,7 @@ This enhanced version introduces improvements to the original implementation inc
 - **Conversation Context**: Maintains dialogue history for more natural interactions
 - **Error Recovery**: Automatic reconnection and fallback mechanisms
 - **Logging & Monitoring**: Comprehensive logging with rotation to prevent disk space issues
+- **Web Interface**: Browser-based configuration and monitoring dashboard
 
 ## Prerequisites
 
@@ -98,13 +103,24 @@ pip install -r requirements.txt
 
 Download the necessary pre-trained models and place them in the correct subdirectories within the `models/` folder:
 
-#### Vosk
+#### Automated Model Download (New!)
+You can use the model downloader utility to automatically download required models:
+
+```bash
+python model_downloader.py
+```
+
+This will check for missing models and download them interactively.
+
+#### Manual Download
+
+##### Vosk
 Download a language model (e.g., `vosk-model-small-en-us-0.15` from https://alphacephei.com/vosk/models). Extract it and place the model directory inside `models/vosk/`.
 
-#### Porcupine
+##### Porcupine
 Download the common model file (`.pv`) and your desired keyword file(s) (`.ppn`) from the Picovoice Console or the Porcupine GitHub repository. Place them in `models/porcupine/`.
 
-#### Piper TTS (Optional)
+##### Piper TTS (Optional)
 If using Piper, download the voice `.onnx` and `.onnx.json` files from https://huggingface.co/rhasspy/piper-voices/tree/main. Place them in `models/piper/`.
 
 ### 6. Configure API Keys
@@ -135,7 +151,8 @@ Alternatively, create a `user_config.json` file to override specific settings wi
   "AVATAR_WINDOW_HEIGHT": 768,
   "AVATAR_ANIMATION_STYLE": "hologram",
   "AUDIO_INPUT_DEVICE_INDEX": 1,
-  "AUDIO_OUTPUT_DEVICE_INDEX": 0
+  "AUDIO_OUTPUT_DEVICE_INDEX": 0,
+  "AVATAR_DEBUG_OVERLAY": true
 }
 ```
 
@@ -150,24 +167,33 @@ python main.py
 
 The application will start, initialize all components, and begin listening for the wake word. The Pygame window displaying the enhanced avatar will appear.
 
+If you've enabled the web interface, you can access it at `http://your_pi_ip:8080`.
+
 ## Enhanced Project Structure
 
 ```
 project_echocore/
-├── main.py                 # Main application with health monitoring
+├── main.py                 # Main application with health monitoring and watchdog
 ├── config.py               # Enhanced configuration with validation
-├── state_manager.py        # Manages application state
+├── state_manager.py        # Manages application state with error tracking
 ├── audio_input.py          # Handles microphone input & wake word with audio cues
+├── audio_output.py         # Plays audio with amplitude calculation
+├── audio_utils.py          # Utilities for audio device management
 ├── stt_processor.py        # Processes audio with confidence scoring
 ├── llm_handler.py          # Interacts with LLM with conversation history
 ├── tts_synthesizer.py      # Synthesizes speech with streaming support
-├── audio_output.py         # Plays audio with amplitude calculation
-├── avatar_display.py       # Enhanced avatar with animations
+├── piper_tts.py            # Dedicated class for Piper TTS functionality
+├── avatar_display.py       # Enhanced avatar with advanced animations
+├── web_interface.py        # Web-based dashboard for monitoring and configuration
+├── model_downloader.py     # Utility for downloading required model files
 ├── requirements.txt        # Python package dependencies
+├── install.sh              # Installation script with virtual environment support
 ├── .env.example            # Example environment file for API keys
 ├── user_config.json        # Optional user configuration overrides
 ├── logs/                   # Directory for log files with rotation
 ├── cache/                  # Cache for TTS responses to reduce API usage
+├── static/                 # Static assets for web interface
+├── templates/              # HTML templates for web interface
 └── models/                 # Directory for local models
     ├── vosk/               # Vosk model files
     ├── piper/              # Piper voice files
@@ -187,6 +213,12 @@ The avatar display now features multiple animation styles based on the current s
 - **Speaking**: Audio-reactive wave visualization
 - **Error**: Warning indicators with animation
 
+Available styles include:
+- `circle`: Simple circular avatar with glow effects
+- `wave`: Audio-reactive wave rings
+- `particle`: Advanced particle system with alpha blending
+- `hologram`: Sci-fi holographic style with scan lines and glitches
+
 ### Audio Feedback
 Audio cues now provide immediate feedback when:
 - Wake word is detected
@@ -197,27 +229,40 @@ Audio cues now provide immediate feedback when:
 - Automatic reconnection to cloud services
 - Graceful degradation when services are unavailable
 - Comprehensive logging with rotation
+- Thread watchdog monitoring to detect and recover from failures
+
+### Web Interface Dashboard
+The new web interface provides:
+- System status monitoring
+- Real-time log viewing and filtering
+- Configuration management through a user-friendly UI
+- Audio device testing functionality
+- Quick actions for system control
 
 ### Configuration Enhancements
 - User-specific configuration via `user_config.json`
 - Runtime validation of critical settings
 - More customization options for all components
+- Audio device selection and management
 
 ### Performance Optimizations
 - Lazy loading of models
 - Queue size limits to prevent memory issues
 - Configurable standby mode for reduced CPU usage
+- Surface caching for improved avatar rendering performance
 
 ## Troubleshooting
 
 ### Audio Issues
 - Run `python -m sounddevice` to list available audio devices and update the device indices in your configuration
+- Use the web interface to test different audio devices
 - If experiencing audio dropouts, try increasing `AUDIO_CHUNK_SIZE` or adjusting `AUDIO_OUTPUT_LATENCY`
 - Ensure the microphone is not being used by another application
 
 ### Visual Display Issues
 - If running on Raspberry Pi OS Lite, ensure the correct display driver is set (e.g., `export SDL_VIDEODRIVER=kmsdrm`)
 - For fullscreen mode, set `AVATAR_FULLSCREEN = True` in your configuration
+- If performance is slow, try reducing `AVATAR_FPS` or using a simpler animation style
 
 ### API Connection Issues
 - Verify your API keys are correct
@@ -227,11 +272,36 @@ Audio cues now provide immediate feedback when:
 ### Log Files
 - Check the logs in the `logs/` directory for detailed error information
 - Use `tail -f logs/echocore.log` to watch the logs in real-time
+- The web interface provides a convenient way to view and filter logs
+
+### Model Issues
+- Run `python model_downloader.py` to check for missing models
+- Ensure model paths in `config.py` match your actual file structure
+
+## Using the Web Interface
+
+To enable the web interface, set the following in your `user_config.json`:
+
+```json
+{
+  "WEB_INTERFACE_ENABLED": true,
+  "WEB_INTERFACE_PORT": 8080,
+  "WEB_INTERFACE_HOST": "0.0.0.0"
+}
+```
+
+Then access the dashboard at `http://your_pi_ip:8080` (default username: admin, password: echocore).
+
+The web interface provides:
+- Dashboard with system status and recent activity
+- Settings page for configuration management
+- Logs viewer with filtering and download options
+- Audio device testing functionality
 
 ## Future Enhancements
 
 Planned future improvements:
-- Web-based configuration interface
+- Expanded web-based configuration interface
 - More sophisticated avatar visualizations
 - Integration with local smart home systems
 - Sentiment analysis for more appropriate responses
