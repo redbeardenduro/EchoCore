@@ -1,44 +1,349 @@
-<div class="settings-section">
-                    <div class="collapsible" onclick="toggleSection(this)">
-                        <i class="fas fa-desktop"></i> Avatar Settings
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EchoCore Settings</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" integrity="sha512-9usAa10IRO0HhonpyAIVpjrylPvoDwiPUiKdWk5t3PyolY1cOd4DSE0Ga+ri4AuTroPR5aQvXU9xC6qOPnzFeg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1><i class="fa-solid fa-gears"></i> EchoCore Settings</h1>
+        </div>
+    </header>
+    <nav>
+        <div class="container">
+            <a href="{{ url_for('index') }}"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
+            <a href="{{ url_for('settings') }}"><i class="fa-solid fa-gears"></i> Settings</a>
+            <a href="{{ url_for('logs') }}"><i class="fa-solid fa-list-ul"></i> Logs</a>
+        </div>
+    </nav>
+
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="card">
+            <h2>Configuration Settings</h2>
+            <p>Changes saved here will override the default settings. A restart may be required for some changes to take effect.</p>
+
+            <form method="post" action="{{ url_for('settings') }}">
+                <div class="settings-section">
+                    <h3 class="collapsible" onclick="toggleSection(this)">
+                        <i class="fa-solid fa-sliders"></i> General Settings
+                    </h3>
+                    <div class="collapsible-content">
+                        <div class="form-group">
+                            <label for="LOG_LEVEL">Logging Level</label>
+                            <select id="LOG_LEVEL" name="LOG_LEVEL">
+                                {% set current_log_level = user_config.get('LOG_LEVEL', config.LOG_LEVEL | string) %}
+                                <option value="DEBUG" {% if current_log_level == 'DEBUG' or current_log_level == 10 %}selected{% endif %}>DEBUG</option>
+                                <option value="INFO" {% if current_log_level == 'INFO' or current_log_level == 20 %}selected{% endif %}>INFO</option>
+                                <option value="WARNING" {% if current_log_level == 'WARNING' or current_log_level == 30 %}selected{% endif %}>WARNING</option>
+                                <option value="ERROR" {% if current_log_level == 'ERROR' or current_log_level == 40 %}selected{% endif %}>ERROR</option>
+                                <option value="CRITICAL" {% if current_log_level == 'CRITICAL' or current_log_level == 50 %}selected{% endif %}>CRITICAL</option>
+                            </select>
+                            <small>Controls the verbosity of logs. DEBUG is most verbose.</small>
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" id="ENABLE_STANDBY_MODE" name="ENABLE_STANDBY_MODE" value="true"
+                                   {% if user_config.get('ENABLE_STANDBY_MODE', config.ENABLE_STANDBY_MODE) %}checked{% endif %}>
+                            <label for="ENABLE_STANDBY_MODE">Enable Standby Mode</label>
+                            <small>Reduces CPU usage when idle for a period (requires restart).</small>
+                        </div>
+                         <div class="form-group">
+                            <label for="STANDBY_TIMEOUT">Standby Timeout (seconds)</label>
+                            <input type="number" id="STANDBY_TIMEOUT" name="STANDBY_TIMEOUT"
+                                   value="{{ user_config.get('STANDBY_TIMEOUT', config.STANDBY_TIMEOUT) }}"
+                                   step="1" min="30" max="3600">
+                             <small>Seconds of inactivity before entering standby mode.</small>
+                        </div>
                     </div>
+                </div>
+
+                 <div class="settings-section">
+                    <h3 class="collapsible" onclick="toggleSection(this)">
+                        <i class="fa-solid fa-volume-high"></i> Audio Settings
+                    </h3>
+                    <div class="collapsible-content">
+                        <div class="form-group">
+                             <label for="AUDIO_INPUT_DEVICE_INDEX">Audio Input Device</label>
+                             <select id="AUDIO_INPUT_DEVICE_INDEX" name="AUDIO_INPUT_DEVICE_INDEX">
+                                 <option value="null" {% if user_config.get('AUDIO_INPUT_DEVICE_INDEX', config.AUDIO_INPUT_DEVICE_INDEX) == None %}selected{% endif %}>System Default</option>
+                                 {% for index, name, sr in audio_inputs %}
+                                 <option value="{{ index }}" {% if user_config.get('AUDIO_INPUT_DEVICE_INDEX', config.AUDIO_INPUT_DEVICE_INDEX) == index %}selected{% endif %}>[{{ index }}] {{ name }}</option>
+                                 {% endfor %}
+                             </select>
+                             <button type="button" class="btn btn-small" onclick="testAudioDevice('input', document.getElementById('AUDIO_INPUT_DEVICE_INDEX').value)"><i class="fa-solid fa-microphone"></i> Test Input</button>
+                         </div>
+
+                         <div class="form-group">
+                             <label for="AUDIO_OUTPUT_DEVICE_INDEX">Audio Output Device</label>
+                             <select id="AUDIO_OUTPUT_DEVICE_INDEX" name="AUDIO_OUTPUT_DEVICE_INDEX">
+                                 <option value="null" {% if user_config.get('AUDIO_OUTPUT_DEVICE_INDEX', config.AUDIO_OUTPUT_DEVICE_INDEX) == None %}selected{% endif %}>System Default</option>
+                                 {% for index, name, sr in audio_outputs %}
+                                 <option value="{{ index }}" {% if user_config.get('AUDIO_OUTPUT_DEVICE_INDEX', config.AUDIO_OUTPUT_DEVICE_INDEX) == index %}selected{% endif %}>[{{ index }}] {{ name }}</option>
+                                 {% endfor %}
+                             </select>
+                              <button type="button" class="btn btn-small" onclick="testAudioDevice('output', document.getElementById('AUDIO_OUTPUT_DEVICE_INDEX').value)"><i class="fa-solid fa-volume-up"></i> Test Output</button>
+                         </div>
+                         {% if audio_error %}
+                            <p class="error-message">Error listing audio devices: {{ audio_error }}</p>
+                         {% endif %}
+
+                         <div class="form-check">
+                            <input type="checkbox" id="ENABLE_AUDIO_CUES" name="ENABLE_AUDIO_CUES" value="true"
+                                   {% if user_config.get('ENABLE_AUDIO_CUES', config.ENABLE_AUDIO_CUES) %}checked{% endif %}>
+                            <label for="ENABLE_AUDIO_CUES">Enable Audio Cues</label>
+                            <small>Play short sounds for events like wake word detection.</small>
+                        </div>
+                        <div class="form-group">
+                             <label for="AUDIO_CUE_VOLUME">Audio Cue Volume (0.0 - 1.0)</label>
+                             <input type="number" id="AUDIO_CUE_VOLUME" name="AUDIO_CUE_VOLUME"
+                                    value="{{ user_config.get('AUDIO_CUE_VOLUME', config.AUDIO_CUE_VOLUME) }}"
+                                    step="0.05" min="0.0" max="1.0">
+                         </div>
+                         <div class="form-group">
+                            <label for="LISTENING_TIMEOUT">Listening Timeout (seconds)</label>
+                            <input type="number" id="LISTENING_TIMEOUT" name="LISTENING_TIMEOUT"
+                                   value="{{ user_config.get('LISTENING_TIMEOUT', config.LISTENING_TIMEOUT) }}"
+                                   step="0.5" min="3.0" max="60.0">
+                            <small>Time to wait for speech after wake word before returning to idle.</small>
+                        </div>
+                         <div class="form-group">
+                            <label for="STT_CONFIDENCE_THRESHOLD">STT Confidence Threshold (0.0 - 1.0)</label>
+                            <input type="number" id="STT_CONFIDENCE_THRESHOLD" name="STT_CONFIDENCE_THRESHOLD"
+                                   value="{{ user_config.get('STT_CONFIDENCE_THRESHOLD', config.STT_CONFIDENCE_THRESHOLD) }}"
+                                   step="0.05" min="0.0" max="1.0">
+                             <small>Minimum confidence score required to accept a speech-to-text result.</small>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                     <h3 class="collapsible" onclick="toggleSection(this)">
+                        <i class="fa-solid fa-brain"></i> Language Model (LLM) Settings
+                    </h3>
+                    <div class="collapsible-content">
+                        <div class="form-group">
+                            <label for="LLM_MODEL">OpenAI Model</label>
+                            <input type="text" id="LLM_MODEL" name="LLM_MODEL"
+                                   value="{{ user_config.get('LLM_MODEL', config.LLM_MODEL) }}">
+                             <small>e.g., gpt-4o, gpt-4o-mini</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="LLM_TEMPERATURE">Temperature (0.0 - 1.0)</label>
+                            <input type="number" id="LLM_TEMPERATURE" name="LLM_TEMPERATURE"
+                                   value="{{ user_config.get('LLM_TEMPERATURE', config.LLM_TEMPERATURE) }}"
+                                   step="0.05" min="0.0" max="1.0">
+                            <small>Controls randomness. Lower is more deterministic, higher is more creative.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="LLM_MAX_TOKENS">Max Response Tokens</label>
+                            <input type="number" id="LLM_MAX_TOKENS" name="LLM_MAX_TOKENS"
+                                   value="{{ user_config.get('LLM_MAX_TOKENS', config.LLM_MAX_TOKENS) }}"
+                                   step="10" min="10" max="1024">
+                             <small>Maximum length of the LLM's response.</small>
+                        </div>
+                        <div class="form-group">
+                             <label for="LLM_MAX_CONVERSATION_TURNS">Conversation History Turns</label>
+                             <input type="number" id="LLM_MAX_CONVERSATION_TURNS" name="LLM_MAX_CONVERSATION_TURNS"
+                                    value="{{ user_config.get('LLM_MAX_CONVERSATION_TURNS', config.LLM_MAX_CONVERSATION_TURNS) }}"
+                                    step="1" min="0" max="50">
+                             <small>Number of past user/assistant message pairs to remember for context (0 disables history).</small>
+                         </div>
+                         <div class="form-group">
+                             <label for="LLM_SYSTEM_PROMPT">System Prompt</label>
+                             <textarea id="LLM_SYSTEM_PROMPT" name="LLM_SYSTEM_PROMPT" rows="4">{{ user_config.get('LLM_SYSTEM_PROMPT', config.LLM_SYSTEM_PROMPT) }}</textarea>
+                             <small>Instructions given to the language model at the start of the conversation.</small>
+                         </div>
+                         <div class="form-check">
+                            <input type="checkbox" id="LLM_OFFLINE_FALLBACK_ENABLED" name="LLM_OFFLINE_FALLBACK_ENABLED" value="true"
+                                   {% if user_config.get('LLM_OFFLINE_FALLBACK_ENABLED', config.LLM_OFFLINE_FALLBACK_ENABLED) %}checked{% endif %}>
+                            <label for="LLM_OFFLINE_FALLBACK_ENABLED">Enable Offline Fallback Response</label>
+                             <small>If checked, provides a canned response when the online LLM fails.</small>
+                        </div>
+                         <div class="form-group">
+                             <label for="LLM_OFFLINE_RESPONSE">Offline Fallback Response Text</label>
+                             <input type="text" id="LLM_OFFLINE_RESPONSE" name="LLM_OFFLINE_RESPONSE"
+                                    value="{{ user_config.get('LLM_OFFLINE_RESPONSE', config.LLM_OFFLINE_RESPONSE) }}">
+                         </div>
+                    </div>
+                </div>
+
+                <div class="settings-section">
+                    <h3 class="collapsible" onclick="toggleSection(this)">
+                        <i class="fa-solid fa-comment-dots"></i> Text-to-Speech (TTS) Settings
+                    </h3>
+                    <div class="collapsible-content">
+                        <div class="form-group">
+                             <label for="TTS_ENGINE">TTS Engine</label>
+                             <select id="TTS_ENGINE" name="TTS_ENGINE" onchange="updateTtsOptions()">
+                                 <option value="openai" {% if user_config.get('TTS_ENGINE', config.TTS_ENGINE) == 'openai' %}selected{% endif %}>OpenAI</option>
+                                 <option value="elevenlabs" {% if user_config.get('TTS_ENGINE', config.TTS_ENGINE) == 'elevenlabs' %}selected{% endif %}>ElevenLabs</option>
+                                 <option value="piper" {% if user_config.get('TTS_ENGINE', config.TTS_ENGINE) == 'piper' %}selected{% endif %}>Piper (Local)</option>
+                             </select>
+                             <small>Select the engine used to generate speech.</small>
+                        </div>
+                        <div class="form-check">
+                            <input type="checkbox" id="TTS_STREAMING" name="TTS_STREAMING" value="true"
+                                   {% if user_config.get('TTS_STREAMING', config.TTS_STREAMING) %}checked{% endif %}>
+                            <label for="TTS_STREAMING">Enable TTS Streaming</label>
+                            <small>Start playback sooner as audio is generated (recommended).</small>
+                        </div>
+                         <div class="form-check">
+                             <input type="checkbox" id="TTS_CACHE_ENABLED" name="TTS_CACHE_ENABLED" value="true"
+                                    {% if user_config.get('TTS_CACHE_ENABLED', config.TTS_CACHE_ENABLED) %}checked{% endif %}>
+                             <label for="TTS_CACHE_ENABLED">Enable TTS Cache</label>
+                             <small>Cache generated audio to reduce API calls and latency (requires restart).</small>
+                         </div>
+
+                        <div class="engine-options" id="openai-tts-options">
+                            <h4>OpenAI TTS Options</h4>
+                             <div class="form-group">
+                                <label for="OPENAI_TTS_MODEL">OpenAI TTS Model</label>
+                                <input type="text" id="OPENAI_TTS_MODEL" name="OPENAI_TTS_MODEL"
+                                       value="{{ user_config.get('OPENAI_TTS_MODEL', config.OPENAI_TTS_MODEL) }}">
+                                 <small>e.g., tts-1, tts-1-hd</small>
+                             </div>
+                            <div class="form-group">
+                                <label for="OPENAI_TTS_VOICE">OpenAI Voice</label>
+                                <select id="OPENAI_TTS_VOICE" name="OPENAI_TTS_VOICE">
+                                    {% set current_openai_voice = user_config.get('OPENAI_TTS_VOICE', config.OPENAI_TTS_VOICE) %}
+                                    <option value="alloy" {% if current_openai_voice == 'alloy' %}selected{% endif %}>Alloy</option>
+                                    <option value="echo" {% if current_openai_voice == 'echo' %}selected{% endif %}>Echo</option>
+                                    <option value="fable" {% if current_openai_voice == 'fable' %}selected{% endif %}>Fable</option>
+                                    <option value="onyx" {% if current_openai_voice == 'onyx' %}selected{% endif %}>Onyx</option>
+                                    <option value="nova" {% if current_openai_voice == 'nova' %}selected{% endif %}>Nova</option>
+                                    <option value="shimmer" {% if current_openai_voice == 'shimmer' %}selected{% endif %}>Shimmer</option>
+                                </select>
+                            </div>
+                             <div class="form-group">
+                                <label for="OPENAI_TTS_FORMAT">OpenAI Output Format</label>
+                                <input type="text" id="OPENAI_TTS_FORMAT" name="OPENAI_TTS_FORMAT"
+                                       value="{{ user_config.get('OPENAI_TTS_FORMAT', config.OPENAI_TTS_FORMAT) }}">
+                                 <small>e.g., pcm, mp3, opus, aac, flac (pcm recommended for direct playback).</small>
+                             </div>
+                        </div>
+
+                        <div class="engine-options" id="elevenlabs-tts-options">
+                             <h4>ElevenLabs TTS Options</h4>
+                            <div class="form-group">
+                                <label for="ELEVENLABS_VOICE">ElevenLabs Voice ID or Name</label>
+                                <input type="text" id="ELEVENLABS_VOICE" name="ELEVENLABS_VOICE"
+                                       value="{{ user_config.get('ELEVENLABS_VOICE', config.ELEVENLABS_VOICE) }}">
+                                <small>Enter the exact Voice ID or Name from your ElevenLabs account.</small>
+                            </div>
+                             <div class="form-group">
+                                <label for="ELEVENLABS_MODEL">ElevenLabs Model</label>
+                                <input type="text" id="ELEVENLABS_MODEL" name="ELEVENLABS_MODEL"
+                                       value="{{ user_config.get('ELEVENLABS_MODEL', config.ELEVENLABS_MODEL) }}">
+                                 <small>e.g., eleven_multilingual_v2</small>
+                             </div>
+                             <div class="form-group">
+                                <label for="ELEVENLABS_STABILITY">Stability (0.0 - 1.0)</label>
+                                <input type="number" id="ELEVENLABS_STABILITY" name="ELEVENLABS_STABILITY"
+                                       value="{{ user_config.get('ELEVENLABS_STABILITY', config.ELEVENLABS_STABILITY) }}"
+                                       step="0.05" min="0.0" max="1.0">
+                             </div>
+                             <div class="form-group">
+                                <label for="ELEVENLABS_SIMILARITY">Similarity Boost (0.0 - 1.0)</label>
+                                <input type="number" id="ELEVENLABS_SIMILARITY" name="ELEVENLABS_SIMILARITY"
+                                       value="{{ user_config.get('ELEVENLABS_SIMILARITY', config.ELEVENLABS_SIMILARITY) }}"
+                                       step="0.05" min="0.0" max="1.0">
+                             </div>
+                        </div>
+
+                        <div class="engine-options" id="piper-tts-options">
+                             <h4>Piper TTS Options (Local)</h4>
+                             <p><small>Ensure the 'piper' executable is installed and in your system PATH.</small></p>
+                            <div class="form-group">
+                                <label for="PIPER_MODEL_PATH">Piper Model Path</label>
+                                <input type="text" id="PIPER_MODEL_PATH" name="PIPER_MODEL_PATH"
+                                       value="{{ user_config.get('PIPER_MODEL_PATH', config.PIPER_MODEL_PATH) }}">
+                                 <small>Path relative to project root (e.g., models/piper/voice.onnx) or absolute path.</small>
+                             </div>
+                            <div class="form-group">
+                                 <label for="PIPER_SPEAKER_ID">Speaker ID (for multi-speaker models)</label>
+                                 <input type="number" id="PIPER_SPEAKER_ID" name="PIPER_SPEAKER_ID"
+                                        value="{{ user_config.get('PIPER_SPEAKER_ID', config.PIPER_SPEAKER_ID) }}"
+                                        step="1" min="0">
+                             </div>
+                             <div class="form-group">
+                                <label for="PIPER_LENGTH_SCALE">Length Scale (>0)</label>
+                                <input type="number" id="PIPER_LENGTH_SCALE" name="PIPER_LENGTH_SCALE"
+                                       value="{{ user_config.get('PIPER_LENGTH_SCALE', config.PIPER_LENGTH_SCALE) }}"
+                                       step="0.05" min="0.1" max="2.0">
+                                 <small>Controls speech speed. >1 is slower, <1 is faster.</small>
+                             </div>
+                             <div class="form-group">
+                                <label for="PIPER_NOISE_SCALE">Noise Scale (>=0)</label>
+                                <input type="number" id="PIPER_NOISE_SCALE" name="PIPER_NOISE_SCALE"
+                                       value="{{ user_config.get('PIPER_NOISE_SCALE', config.PIPER_NOISE_SCALE) }}"
+                                       step="0.05" min="0.0" max="1.0">
+                                 <small>Controls voice variability/noise.</small>
+                             </div>
+                        </div>
+                    </div>
+                </div>
+
+
+                <div class="settings-section">
+                    <h3 class="collapsible" onclick="toggleSection(this)">
+                        <i class="fa-solid fa-desktop"></i> Avatar Display Settings
+                    </h3>
                     <div class="collapsible-content">
                         <div class="form-group">
                             <label for="AVATAR_ANIMATION_STYLE">Animation Style</label>
                             <select id="AVATAR_ANIMATION_STYLE" name="AVATAR_ANIMATION_STYLE">
-                                <option value="circle" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'circle' %}selected{% endif %}>Circle</option>
-                                <option value="wave" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'wave' %}selected{% endif %}>Wave</option>
-                                <option value="particle" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'particle' %}selected{% endif %}>Particle</option>
-                                <option value="hologram" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'hologram' %}selected{% endif %}>Hologram</option>
+                                {% set current_avatar_style = user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) %}
+                                <option value="circle" {% if current_avatar_style == 'circle' %}selected{% endif %}>Circle</option>
+                                <option value="wave" {% if current_avatar_style == 'wave' %}selected{% endif %}>Wave</option>
+                                <option value="particle" {% if current_avatar_style == 'particle' %}selected{% endif %}>Particle</option>
+                                <option value="hologram" {% if current_avatar_style == 'hologram' %}selected{% endif %}>Hologram</option>
                             </select>
                         </div>
-                        
+
                         <div class="form-group">
-                            <label for="AVATAR_WINDOW_WIDTH">Window Width</label>
-                            <input type="number" id="AVATAR_WINDOW_WIDTH" name="AVATAR_WINDOW_WIDTH" 
-                                   value="{{ user_config.get('AVATAR_WINDOW_WIDTH', config.AVATAR_WINDOW_WIDTH) }}" 
-                                   step="1" min="320" max="1920">
+                            <label for="AVATAR_WINDOW_WIDTH">Window Width (pixels)</label>
+                            <input type="number" id="AVATAR_WINDOW_WIDTH" name="AVATAR_WINDOW_WIDTH"
+                                   value="{{ user_config.get('AVATAR_WINDOW_WIDTH', config.AVATAR_WINDOW_WIDTH) }}"
+                                   step="1" min="320" max="3840">
                         </div>
-                        
+
                         <div class="form-group">
-                            <label for="AVATAR_WINDOW_HEIGHT">Window Height</label>
-                            <input type="number" id="AVATAR_WINDOW_HEIGHT" name="AVATAR_WINDOW_HEIGHT" 
-                                   value="{{ user_config.get('AVATAR_WINDOW_HEIGHT', config.AVATAR_WINDOW_HEIGHT) }}" 
-                                   step="1" min="240" max="1080">
+                            <label for="AVATAR_WINDOW_HEIGHT">Window Height (pixels)</label>
+                            <input type="number" id="AVATAR_WINDOW_HEIGHT" name="AVATAR_WINDOW_HEIGHT"
+                                   value="{{ user_config.get('AVATAR_WINDOW_HEIGHT', config.AVATAR_WINDOW_HEIGHT) }}"
+                                   step="1" min="240" max="2160">
                         </div>
-                        
+                        <div class="form-group">
+                             <label for="AVATAR_FPS">Target FPS</label>
+                             <input type="number" id="AVATAR_FPS" name="AVATAR_FPS"
+                                    value="{{ user_config.get('AVATAR_FPS', config.AVATAR_FPS) }}"
+                                    step="1" min="10" max="60">
+                             <small>Target frames per second for the avatar animation.</small>
+                         </div>
+
                         <div class="form-check">
                             <input type="checkbox" id="AVATAR_DISPLAY_STATUS_TEXT" name="AVATAR_DISPLAY_STATUS_TEXT" value="true"
                                    {% if user_config.get('AVATAR_DISPLAY_STATUS_TEXT', config.AVATAR_DISPLAY_STATUS_TEXT) %}checked{% endif %}>
                             <label for="AVATAR_DISPLAY_STATUS_TEXT">Display Status Text</label>
                         </div>
-                        
+
                         <div class="form-check">
                             <input type="checkbox" id="AVATAR_DEBUG_OVERLAY" name="AVATAR_DEBUG_OVERLAY" value="true"
                                    {% if user_config.get('AVATAR_DEBUG_OVERLAY', config.AVATAR_DEBUG_OVERLAY) %}checked{% endif %}>
                             <label for="AVATAR_DEBUG_OVERLAY">Enable Debug Overlay</label>
                         </div>
-                        
+
                         <div class="form-check">
                             <input type="checkbox" id="AVATAR_FULLSCREEN" name="AVATAR_FULLSCREEN" value="true"
                                    {% if user_config.get('AVATAR_FULLSCREEN', config.AVATAR_FULLSCREEN) %}checked{% endif %}>
@@ -46,113 +351,138 @@
                         </div>
                     </div>
                 </div>
-                
+
                 <div class="settings-section">
-                    <div class="collapsible" onclick="toggleSection(this)">
-                        <i class="fas fa-globe"></i> Web Interface Settings
-                    </div>
+                    <h3 class="collapsible" onclick="toggleSection(this)">
+                        <i class="fa-solid fa-globe"></i> Web Interface Settings
+                    </h3>
                     <div class="collapsible-content">
                         <div class="form-check">
                             <input type="checkbox" id="WEB_INTERFACE_ENABLED" name="WEB_INTERFACE_ENABLED" value="true"
                                    {% if user_config.get('WEB_INTERFACE_ENABLED', config.WEB_INTERFACE_ENABLED) %}checked{% endif %}>
                             <label for="WEB_INTERFACE_ENABLED">Enable Web Interface</label>
+                             <small>(Requires restart)</small>
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="WEB_INTERFACE_PORT">Port</label>
-                            <input type="number" id="WEB_INTERFACE_PORT" name="WEB_INTERFACE_PORT" 
-                                   value="{{ user_config.get('WEB_INTERFACE_PORT', config.WEB_INTERFACE_PORT) }}" 
+                            <input type="number" id="WEB_INTERFACE_PORT" name="WEB_INTERFACE_PORT"
+                                   value="{{ user_config.get('WEB_INTERFACE_PORT', config.WEB_INTERFACE_PORT) }}"
                                    step="1" min="1024" max="65535">
+                             <small>(Requires restart)</small>
                         </div>
-                        
+
                         <div class="form-group">
-                            <label for="WEB_INTERFACE_HOST">Host</label>
-                            <input type="text" id="WEB_INTERFACE_HOST" name="WEB_INTERFACE_HOST" 
+                            <label for="WEB_INTERFACE_HOST">Host Address</label>
+                            <input type="text" id="WEB_INTERFACE_HOST" name="WEB_INTERFACE_HOST"
                                    value="{{ user_config.get('WEB_INTERFACE_HOST', config.WEB_INTERFACE_HOST) }}">
-                            <small>Use 0.0.0.0 to allow connections from any IP address</small>
+                            <small>Use 0.0.0.0 to allow connections from any IP address. (Requires restart)</small>
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="WEB_INTERFACE_USERNAME">Username</label>
-                            <input type="text" id="WEB_INTERFACE_USERNAME" name="WEB_INTERFACE_USERNAME" 
+                            <input type="text" id="WEB_INTERFACE_USERNAME" name="WEB_INTERFACE_USERNAME"
                                    value="{{ user_config.get('WEB_INTERFACE_USERNAME', config.WEB_INTERFACE_USERNAME) }}">
+                            <small>(Requires restart)</small>
                         </div>
-                        
+
                         <div class="form-group">
                             <label for="WEB_INTERFACE_PASSWORD">Password</label>
-                            <input type="password" id="WEB_INTERFACE_PASSWORD" name="WEB_INTERFACE_PASSWORD" 
+                            <input type="password" id="WEB_INTERFACE_PASSWORD" name="WEB_INTERFACE_PASSWORD"
                                    value="{{ user_config.get('WEB_INTERFACE_PASSWORD', config.WEB_INTERFACE_PASSWORD) }}">
+                            <small>Leave blank to keep current password. (Requires restart)</small>
                         </div>
                     </div>
                 </div>
-                
-                <div class="form-group">
-                    <button type="submit" class="btn btn-secondary"><i class="fas fa-save"></i> Save Settings</button>
+
+                <div class="form-group submit-group">
+                    <button type="submit" class="btn btn-primary btn-large"><i class="fa-solid fa-save"></i> Save All Settings</button>
                 </div>
             </form>
+        </div> </div> <footer>
+        <div class="container">
+            <p>Project EchoCore Enhanced</p>
         </div>
-    </div>
-    
+    </footer>
+
     <script>
         // Function to toggle collapsible sections
         function toggleSection(element) {
             element.classList.toggle("active");
+            // Find the next sibling element which is the content
             var content = element.nextElementSibling;
-            if (content.style.display === "block") {
-                content.style.display = "none";
-            } else {
-                content.style.display = "block";
+            if (content && content.classList.contains('collapsible-content')) {
+                if (content.style.display === "block") {
+                    content.style.display = "none";
+                } else {
+                    content.style.display = "block";
+                }
             }
         }
-        
+
         // Function to update TTS options visibility based on selected engine
         function updateTtsOptions() {
             var selectedEngine = document.getElementById('TTS_ENGINE').value;
-            var options = document.getElementsByClassName('engine-options');
-            
-            for (var i = 0; i < options.length; i++) {
-                options[i].style.display = 'none';
-            }
-            
-            if (selectedEngine === 'openai') {
-                document.getElementById('openai-tts-options').style.display = 'block';
-            } else if (selectedEngine === 'elevenlabs') {
-                document.getElementById('elevenlabs-tts-options').style.display = 'block';
-            } else if (selectedEngine === 'piper') {
-                document.getElementById('piper-tts-options').style.display = 'block';
+            // Hide all engine-specific option divs first
+            document.querySelectorAll('.engine-options').forEach(function(div) {
+                div.style.display = 'none';
+            });
+
+            // Show the options for the selected engine
+            var optionsDiv = document.getElementById(selectedEngine + '-tts-options');
+            if (optionsDiv) {
+                optionsDiv.style.display = 'block';
             }
         }
-        
-        // Function to test audio devices
+
+        // Function to test audio devices via API call
         function testAudioDevice(deviceType, deviceIndex) {
-            // Convert "null" string to null value
-            if (deviceIndex === "null") deviceIndex = null;
-            
-            fetch('/audio-test', {
+            // Handle 'null' string from select options
+            if (deviceIndex === "null" || deviceIndex === "") {
+                deviceIndex = null; // Send null to backend for default device
+            }
+
+            // Use Fetch API to send POST request
+            fetch('{{ url_for("audio_test") }}', { // Use url_for for endpoint
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded',
+                    // Include CSRF token here if using Flask-WTF CSRF protection
                 },
-                body: 'device_type=' + deviceType + '&device_index=' + deviceIndex
+                // Encode form data
+                body: `device_type=${encodeURIComponent(deviceType)}&device_index=${encodeURIComponent(deviceIndex === null ? 'null' : deviceIndex)}`
             })
-            .then(response => response.json())
+            .then(response => {
+                if (!response.ok) {
+                    // Try to get error message from response body if possible
+                    return response.json().then(errData => {
+                        throw new Error(errData.message || `HTTP error ${response.status}`);
+                    }).catch(() => {
+                         // Fallback if response is not JSON or has no message
+                        throw new Error(`HTTP error ${response.status}`);
+                    });
+                }
+                return response.json();
+            })
             .then(data => {
-                alert(data.message);
+                 // Display success or failure message
+                alert(data.message || 'Test request sent.');
             })
             .catch(error => {
                 console.error('Error testing audio device:', error);
-                alert('Error testing audio device. Check console for details.');
+                alert(`Error testing audio device: ${error.message}. Check console/logs.`);
             });
         }
-        
+
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
+            // Set initial visibility of TTS options
             updateTtsOptions();
-            
-            // Open first section by default
+
+            // Optional: Open the first section by default, or based on URL hash, etc.
             var firstSection = document.querySelector('.collapsible');
             if (firstSection) {
-                toggleSection(firstSection);
+                // toggleSection(firstSection); // Uncomment to open first section initially
             }
         });
     </script>
