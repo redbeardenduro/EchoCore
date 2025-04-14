@@ -70,6 +70,20 @@ check_directory() {
     fi
 }
 
+# Set non-root user (typically 'pi' on Raspberry Pi, but check for other platforms)
+if id "pi" &>/dev/null; then
+    INSTALL_USER="pi"
+else
+    # Try to find a non-root user
+    INSTALL_USER=$(who | awk '{print $1}' | sort | uniq | grep -v "root" | head -n1)
+    if [ -z "$INSTALL_USER" ]; then
+        log "${YELLOW}Warning: Could not determine a non-root user. Using 'ubuntu' as default.${NC}"
+        INSTALL_USER="ubuntu"
+    fi
+fi
+
+log "Installation will use user: ${INSTALL_USER}"
+
 # Step 1: Update system packages
 log "${BOLD}${GREEN}Step 1: Updating system packages...${NC}"
 execute "apt update"
@@ -93,6 +107,7 @@ check_directory "$PROJECT_DIR/cache"
 log "${BOLD}${GREEN}Step 4: Setting up Python virtual environment...${NC}"
 if [ ! -d "$PROJECT_DIR/venv" ]; then
     execute "python3 -m venv $PROJECT_DIR/venv"
+    log "Virtual environment created at $PROJECT_DIR/venv"
 else
     log "Virtual environment already exists, skipping creation."
 fi
@@ -136,7 +151,13 @@ log "2. Place .onnx and .onnx.json files in $PROJECT_DIR/models/piper/"
 # Step 8: Create configuration files
 log "${BOLD}${GREEN}Step 8: Creating configuration files...${NC}"
 if [ ! -f "$PROJECT_DIR/.env" ]; then
-    cat > "$PROJECT_DIR/.env" << EOF
+    # Check if .env.example exists first
+    if [ -f "$PROJECT_DIR/.env.example" ]; then
+        execute "cp $PROJECT_DIR/.env.example $PROJECT_DIR/.env"
+        log "Created .env file from .env.example. Please edit with your API keys."
+    else
+        # Create a basic .env file if no example exists
+        cat > "$PROJECT_DIR/.env" << EOF
 # .env file for Project EchoCore
 # Fill in your API keys
 
@@ -144,13 +165,47 @@ OPENAI_API_KEY=""
 ELEVENLABS_API_KEY=""
 PICOVOICE_ACCESS_KEY=""
 EOF
-    log "Created .env template file. Please edit with your API keys."
+        log "Created .env template file. Please edit with your API keys."
+    fi
 else
     log ".env file already exists, skipping creation."
 fi
 
-# Step 9: Setup systemd service for auto-start
-log "${BOLD}${GREEN}Step 9: Setting up systemd service...${NC}"
+# Step 9: Create activation script for easy environment activation
+log "${BOLD}${GREEN}Step 9: Creating activation script...${NC}"
+ACTIVATE_SCRIPT="$PROJECT_DIR/activate_echocore.sh"
+cat > "$ACTIVATE_SCRIPT" << EOF
+#!/bin/bash
+# EchoCore Environment Activation Script
+
+# Activate Python virtual environment
+echo "Activating EchoCore virtual environment..."
+source $PROJECT_DIR/venv/bin/activate
+
+# Set working directory
+cd $PROJECT_DIR
+
+# Display help message
+echo ""
+echo "EchoCore environment activated!"
+echo "You can now run the application with:"
+echo "  python main.py"
+echo ""
+echo "To deactivate the virtual environment, type:"
+echo "  deactivate"
+echo ""
+
+# Execute any additional commands if provided
+if [ \$# -gt 0 ]; then
+    exec "\$@"
+fi
+EOF
+
+execute "chmod +x $ACTIVATE_SCRIPT"
+log "Created activation script: $ACTIVATE_SCRIPT"
+
+# Step 10: Setup systemd service for auto-start
+log "${BOLD}${GREEN}Step 10: Setting up systemd service...${NC}"
 SERVICE_FILE="/etc/systemd/system/echocore.service"
 
 cat > "$SERVICE_FILE" << EOF
@@ -160,9 +215,9 @@ After=network.target
 
 [Service]
 Type=simple
-User=pi
+User=$INSTALL_USER
 WorkingDirectory=$PROJECT_DIR
-ExportENVIRONMENT=DISPLAY=:0
+Environment=DISPLAY=:0
 ExecStart=$PROJECT_DIR/venv/bin/python main.py
 Restart=on-failure
 RestartSec=5
@@ -176,9 +231,43 @@ execute "systemctl daemon-reload"
 log "Systemd service created. You can start it with: sudo systemctl start echocore"
 log "To enable autostart at boot: sudo systemctl enable echocore"
 
-# Step 10: Setup permissions
-log "${BOLD}${GREEN}Step 10: Setting permissions...${NC}"
-execute "chown -R pi:pi $PROJECT_DIR"
+# Step 11: Setup permissions
+log "${BOLD}${GREEN}Step 11: Setting permissions...${NC}"
+execute "chown -R $INSTALL_USER:$INSTALL_USER $PROJECT_DIR"
+
+# Step 12: Create simple uninstall script (optional)
+log "${BOLD}${GREEN}Step 12: Creating uninstall script...${NC}"
+UNINSTALL_SCRIPT="$PROJECT_DIR/uninstall_echocore.sh"
+cat > "$UNINSTALL_SCRIPT" << EOF
+#!/bin/bash
+# EchoCore Uninstall Script
+
+echo "This script will remove EchoCore from your system."
+echo "WARNING: This will delete all project files, models, and configuration."
+read -p "Are you sure you want to proceed? (y/n) " -n 1 -r
+echo
+if [[ ! \$REPLY =~ ^[Yy]$ ]]; then
+    echo "Uninstall cancelled."
+    exit 0
+fi
+
+echo "Stopping EchoCore service..."
+sudo systemctl stop echocore
+sudo systemctl disable echocore
+
+echo "Removing systemd service..."
+sudo rm -f /etc/systemd/system/echocore.service
+sudo systemctl daemon-reload
+
+echo "Removing project directory..."
+sudo rm -rf $PROJECT_DIR
+
+echo "EchoCore has been uninstalled."
+EOF
+
+execute "chmod +x $UNINSTALL_SCRIPT"
+execute "chown $INSTALL_USER:$INSTALL_USER $UNINSTALL_SCRIPT"
+log "Created uninstall script: $UNINSTALL_SCRIPT"
 
 # Final instructions
 log "${BOLD}${GREEN}Installation completed!${NC}"
@@ -186,7 +275,10 @@ log
 log "${BOLD}Next steps:${NC}"
 log "1. Edit $PROJECT_DIR/.env to add your API keys"
 log "2. Download model files as described above"
-log "3. Test the application: cd $PROJECT_DIR && source venv/bin/activate && python main.py"
+log "3. Test the application with:"
+log "   source $ACTIVATE_SCRIPT"
+log "   python main.py"
+log
 log "4. Once tested, enable the service: sudo systemctl enable echocore"
 log
 log "${BOLD}${BLUE}Thank you for installing Project EchoCore!${NC}"
