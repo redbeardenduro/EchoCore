@@ -1,27 +1,35 @@
-# requirements.txt
-
 # Core
-python-dotenv
-numpy
+python-dotenv>=0.19.0
+numpy>=1.20.0
 
 # Audio I/O
-sounddevice
+sounddevice>=0.4.4
 
 # Wake Word
-pvporcupine
+pvporcupine>=2.1.0
 
 # STT
-vosk
+vosk>=0.3.42
 
 # LLM
-openai
+openai>=1.0.0
 
 # TTS (Choose based on config.TTS_ENGINE)
-elevenlabs # If using ElevenLabs
-# piper-tts # If using Piper (installation might need specific steps/build)
+elevenlabs>=0.2.0 # If using ElevenLabs
+# piper-tts>=1.2.0 # If using Piper (installation might need specific steps/build)
 
 # Avatar
-pygame
+pygame>=2.0.1
+
+# Web Interface
+flask>=2.0.0
+flask-httpauth>=4.2.0
+
+# System Monitoring
+psutil>=5.8.0
+
+# Logging
+python-json-logger>=2.0.0
 
 # Optional: Sentiment Analysis
-# vaderSentiment
+# vaderSentiment>=3.3.2
