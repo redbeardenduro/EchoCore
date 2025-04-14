@@ -57,6 +57,7 @@ AUDIO_INPUT_CHANNELS = 1
 AUDIO_OUTPUT_CHANNELS = 1
 AUDIO_DTYPE = 'int16'  # Data type for audio samples
 AUDIO_OUTPUT_LATENCY = 'low'  # Latency setting for output stream ['low', 'high', float seconds]
+AUDIO_AMPLITUDE_SCALING_DIVISOR = 2**10  # Divisor for normalizing amplitude (moved from audio_output.py)
 
 # --- Audio Feedback Settings ---
 ENABLE_AUDIO_CUES = True  # Whether to play audio cues for state changes
@@ -74,6 +75,7 @@ LISTENING_TIMEOUT = 10.0  # Seconds to listen before timing out if no speech det
 # Path to the Vosk model directory
 VOSK_MODEL_PATH = "models/vosk/vosk-model-small-en-us-0.15"  # Example path
 VOSK_LOG_LEVEL = -1  # Disable Vosk logging
+VOSK_TIMEOUT_SECONDS = 10.0  # Seconds to wait before timing out speech recognition
 STT_CONFIDENCE_THRESHOLD = 0.7  # Minimum confidence for accepting transcription
 
 # --- LLM Settings (OpenAI) ---
@@ -81,6 +83,8 @@ STT_CONFIDENCE_THRESHOLD = 0.7  # Minimum confidence for accepting transcription
 LLM_MODEL = "gpt-4o-mini"  # e.g., "gpt-4o", "gpt-4o-mini"
 LLM_TIMEOUT = 30  # Timeout for API calls in seconds
 LLM_MAX_CONVERSATION_TURNS = 10  # Maximum conversation history to retain
+LLM_TEMPERATURE = 0.7  # Controls randomness (0.0 to 1.0, higher = more random)
+LLM_MAX_TOKENS = 150  # Maximum tokens in response
 LLM_SYSTEM_PROMPT = """You are Echo, a helpful voice assistant. 
 Keep your responses concise and conversational.
 You're running on a Raspberry Pi 5 as part of Project EchoCore."""
@@ -131,6 +135,7 @@ AVATAR_FPS = 30  # Target frames per second
 AVATAR_ANIMATION_STYLE = "wave"  # Options: "circle", "wave", "particle", "hologram"
 AVATAR_DISPLAY_STATUS_TEXT = True  # Show status text
 AVATAR_FULLSCREEN = False  # Run in fullscreen mode
+AVATAR_DEBUG_OVERLAY = False  # Enable debug overlay with state and amplitude
 
 # --- Web Interface Settings ---
 WEB_INTERFACE_ENABLED = False  # Whether to enable web configuration interface
