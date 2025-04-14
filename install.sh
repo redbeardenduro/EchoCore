@@ -1,7 +1,46 @@
 #!/bin/bash
+# shellcheck disable=SC2155 # Allow dynamic variable assignment
 
-# Project EchoCore Installation Script
-# This script sets up the EchoCore environment on a Raspberry Pi
+# ==========================================================
+# Project EchoCore Enhanced Installation Script
+# ==========================================================
+# This script automates the setup of EchoCore on a
+# Debian-based system (like Raspberry Pi OS).
+# It installs dependencies, sets up directories, creates a
+# virtual environment, and configures a systemd service.
+#
+# Usage: sudo bash install.sh
+# ==========================================================
+
+# --- Configuration ---
+# Installation directory
+PROJECT_DIR="/opt/echocore"
+# User to run the application as (change if needed)
+# Attempts to find the primary logged-in non-root user, falls back to 'pi' or 'ubuntu'
+DEFAULT_USER="pi" # Fallback 1
+DEFAULT_USER2="ubuntu" # Fallback 2
+INSTALL_USER=$(who | awk '{print $1}' | sort | uniq | grep -v "root" | head -n 1)
+if [ -z "$INSTALL_USER" ]; then
+    if id "$DEFAULT_USER" &>/dev/null; then
+        INSTALL_USER="$DEFAULT_USER"
+    elif id "$DEFAULT_USER2" &>/dev/null; then
+         INSTALL_USER="$DEFAULT_USER2"
+    else
+        echo "WARNING: Could not determine non-root user. Set INSTALL_USER manually."
+        # Optionally exit or prompt here
+        INSTALL_USER="echocore_user" # Placeholder if needed
+    fi
+fi
+
+# Repository URL (optional - leave empty to skip clone)
+# GIT_REPO_URL="https://github.com/your_username/Project_EchoCore.git"
+GIT_REPO_URL=""
+
+
+# --- Script Setup ---
+set -e # Exit immediately if a command exits with a non-zero status.
+# set -u # Treat unset variables as an error.
+# set -o pipefail # Causes pipelines to fail on the first command that fails.
 
 # Text formatting
 BOLD='\033[1m'
@@ -11,274 +50,295 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
-# Print header
-echo -e "${BOLD}${BLUE}"
-echo "=========================================================="
-echo "       Project EchoCore Installation Script"
-echo "=========================================================="
-echo -e "${NC}"
+# Log file
+LOG_FILE="$(pwd)/echocore_install_$(date +%Y%m%d_%H%M%S).log"
+touch "$LOG_FILE"
 
-# Check if running on Raspberry Pi
-if ! grep -q "Raspberry Pi" /proc/device-tree/model 2>/dev/null; then
-    echo -e "${YELLOW}Warning: This doesn't appear to be a Raspberry Pi.${NC}"
-    echo -e "The script is optimized for Raspberry Pi. Continue at your own risk."
-    read -p "Continue installation? (y/n) " -n 1 -r
+# Function to log messages to console and file
+log() {
+    echo -e "$1" | tee -a "$LOG_FILE"
+}
+
+# Function to execute commands, log output, and handle errors
+execute() {
+    local cmd="$1"
+    local allow_failure="${2:-false}" # Set to 'true' to continue on failure
+
+    log "${BLUE}Executing: ${cmd}${NC}"
+    # Use eval to handle complex commands with pipes/redirects if needed, but be careful
+    # Safer: Use bash -c "$cmd" >> "$LOG_FILE" 2>&1
+    if bash -c "$cmd" >> "$LOG_FILE" 2>&1; then
+        log "${GREEN}Success.${NC}"
+    else
+        local exit_code=$?
+        log "${RED}Command failed with exit code ${exit_code}:${NC} $cmd"
+        log "Check $LOG_FILE for detailed error output."
+        if [ "$allow_failure" != "true" ]; then
+            log "${RED}Installation cannot proceed. Exiting.${NC}"
+            exit 1
+        else
+            log "${YELLOW}Continuing installation despite command failure (allow_failure=true).${NC}"
+        fi
+        return $exit_code # Return the actual exit code
+    fi
+    return 0
+}
+
+# --- Pre-flight Checks ---
+log "${BOLD}Starting EchoCore Installation...${NC}"
+log "Log file: $LOG_FILE"
+log "Project Directory: $PROJECT_DIR"
+log "Install User: $INSTALL_USER"
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    log "${RED}This script needs root privileges to install system packages and setup services.${NC}"
+    log "Please run using 'sudo bash install.sh'"
+    exit 1
+fi
+
+# Check if target user exists
+if ! id "$INSTALL_USER" &>/dev/null; then
+    log "${YELLOW}User '$INSTALL_USER' does not exist.${NC}"
+    read -p "Create user '$INSTALL_USER'? (y/n) " -n 1 -r REPLY
     echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-        echo "Installation aborted."
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        execute "useradd -m -s /bin/bash $INSTALL_USER" || exit 1
+        log "User '$INSTALL_USER' created."
+    else
+        log "${RED}Installation requires a valid user. Exiting.${NC}"
         exit 1
     fi
 fi
 
-# Check if root
-if [ "$EUID" -ne 0 ]; then
-    echo -e "${YELLOW}This script needs to install system packages.${NC}"
-    echo "Please run with sudo."
-    exit 1
+# Check for Raspberry Pi (informational)
+if grep -q "Raspberry Pi" /proc/device-tree/model 2>/dev/null; then
+    log "Detected Raspberry Pi."
+else
+    log "${YELLOW}Warning: Not running on a known Raspberry Pi model. Compatibility not guaranteed.${NC}"
 fi
 
-# Create log file
-LOG_FILE="install_log.txt"
-echo "Installation log created on $(date)" > $LOG_FILE
 
-# Function to log and display messages
-log() {
-    echo -e "$1" | tee -a $LOG_FILE
-}
+# --- Installation Steps ---
 
-# Function to execute commands and log output
-execute() {
-    log "${BOLD}Executing: $1${NC}"
-    eval $1 >> $LOG_FILE 2>&1
-    if [ $? -ne 0 ]; then
-        log "${RED}Command failed: $1${NC}"
-        log "Check $LOG_FILE for details."
-        if [ "$2" != "continue" ]; then
-            log "${RED}Installation failed.${NC}"
-            exit 1
-        fi
-    fi
-}
+# Step 1: Update System Packages
+log "\n${BOLD}${GREEN}Step 1: Updating system packages...${NC}"
+execute "apt-get update"
+execute "apt-get upgrade -y" "true" # Allow upgrade to fail without halting install
 
-# Function to check and create directories
-check_directory() {
-    if [ ! -d "$1" ]; then
-        log "Creating directory: $1"
-        mkdir -p "$1"
+# Step 2: Install System Dependencies
+log "\n${BOLD}${GREEN}Step 2: Installing system dependencies...${NC}"
+# Core: git, python3, pip, venv
+# Audio: portaudio, libasound (for sounddevice)
+# Pygame: Check common dependencies (might vary slightly by OS version)
+PYGAME_DEPS="libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev" # Common deps
+# Piper TTS: Requires manual install (remind user later)
+execute "apt-get install -y git python3-pip python3-venv python3-dev portaudio19-dev libasound2-dev $PYGAME_DEPS"
+
+# Step 3: Create Project Directory Structure
+log "\n${BOLD}${GREEN}Step 3: Creating project directories...${NC}"
+execute "mkdir -p $PROJECT_DIR"
+execute "mkdir -p $PROJECT_DIR/models/vosk"
+execute "mkdir -p $PROJECT_DIR/models/porcupine"
+execute "mkdir -p $PROJECT_DIR/models/piper"
+execute "mkdir -p $PROJECT_DIR/logs"
+execute "mkdir -p $PROJECT_DIR/cache"
+execute "mkdir -p $PROJECT_DIR/static"
+execute "mkdir -p $PROJECT_DIR/templates"
+
+# Step 4: Clone or Copy Project Files
+log "\n${BOLD}${GREEN}Step 4: Obtaining project files...${NC}"
+if [ -n "$GIT_REPO_URL" ]; then
+    if [ -d "$PROJECT_DIR/.git" ]; then
+        log "Git repository already exists. Attempting to pull updates..."
+        # Stash local changes, pull, then apply stash if needed
+        execute "cd $PROJECT_DIR && git stash push --include-untracked" "true"
+        execute "cd $PROJECT_DIR && git pull" "true" # Allow pull to fail if offline etc.
+        execute "cd $PROJECT_DIR && git stash pop" "true"
     else
-        log "Directory already exists: $1"
+        log "Cloning repository from $GIT_REPO_URL..."
+        # Clone into a temporary directory first, then move to avoid issues if PROJECT_DIR isn't empty
+        TMP_CLONE_DIR=$(mktemp -d)
+        execute "git clone --depth 1 $GIT_REPO_URL $TMP_CLONE_DIR" # Shallow clone
+        # Move contents, handle existing files carefully (rsync is good)
+        execute "rsync -a --remove-source-files $TMP_CLONE_DIR/ $PROJECT_DIR/"
+        rm -rf "$TMP_CLONE_DIR"
     fi
-}
-
-# Set non-root user (typically 'pi' on Raspberry Pi, but check for other platforms)
-if id "pi" &>/dev/null; then
-    INSTALL_USER="pi"
 else
-    # Try to find a non-root user
-    INSTALL_USER=$(who | awk '{print $1}' | sort | uniq | grep -v "root" | head -n1)
-    if [ -z "$INSTALL_USER" ]; then
-        log "${YELLOW}Warning: Could not determine a non-root user. Using 'ubuntu' as default.${NC}"
-        INSTALL_USER="ubuntu"
-    fi
+    log "${YELLOW}GIT_REPO_URL not set. Skipping clone.${NC}"
+    log "Ensure project files (main.py, config.py, etc.) are manually copied to $PROJECT_DIR"
+    # Add a pause or check here if needed
+    read -p "Press Enter when project files are copied to $PROJECT_DIR..."
 fi
 
-log "Installation will use user: ${INSTALL_USER}"
-
-# Step 1: Update system packages
-log "${BOLD}${GREEN}Step 1: Updating system packages...${NC}"
-execute "apt update"
-execute "apt upgrade -y" "continue"
-
-# Step 2: Install system dependencies
-log "${BOLD}${GREEN}Step 2: Installing system dependencies...${NC}"
-execute "apt install -y git python3-pip python3-venv portaudio19-dev libasound2-dev libfmt-dev libspdlog-dev"
-
-# Step 3: Create project directory structure
-log "${BOLD}${GREEN}Step 3: Creating project directory structure...${NC}"
-PROJECT_DIR="/opt/echocore"
-check_directory "$PROJECT_DIR"
-check_directory "$PROJECT_DIR/models/vosk"
-check_directory "$PROJECT_DIR/models/porcupine"
-check_directory "$PROJECT_DIR/models/piper"
-check_directory "$PROJECT_DIR/logs"
-check_directory "$PROJECT_DIR/cache"
-
-# Step 4: Setup Python virtual environment
-log "${BOLD}${GREEN}Step 4: Setting up Python virtual environment...${NC}"
-if [ ! -d "$PROJECT_DIR/venv" ]; then
-    execute "python3 -m venv $PROJECT_DIR/venv"
-    log "Virtual environment created at $PROJECT_DIR/venv"
+# Step 5: Set up Python Virtual Environment
+log "\n${BOLD}${GREEN}Step 5: Setting up Python virtual environment...${NC}"
+VENV_DIR="$PROJECT_DIR/venv"
+if [ ! -d "$VENV_DIR" ]; then
+    execute "python3 -m venv $VENV_DIR"
+    log "Virtual environment created at $VENV_DIR"
 else
-    log "Virtual environment already exists, skipping creation."
+    log "Virtual environment already exists at $VENV_DIR."
+fi
+# Ensure permissions allow the user to use the venv
+execute "chown -R $INSTALL_USER:$INSTALL_USER $VENV_DIR"
+
+
+# Step 6: Install Python Dependencies
+log "\n${BOLD}${GREEN}Step 6: Installing Python dependencies...${NC}"
+REQUIREMENTS_FILE="$PROJECT_DIR/requirements.txt"
+if [ -f "$REQUIREMENTS_FILE" ]; then
+    # Run pip install as the target user
+    execute "sudo -u $INSTALL_USER bash -c 'source $VENV_DIR/bin/activate && pip install --upgrade pip'"
+    execute "sudo -u $INSTALL_USER bash -c 'source $VENV_DIR/bin/activate && pip install -r $REQUIREMENTS_FILE'" "true" # Allow failure for optional deps
+else
+    log "${YELLOW}Warning: requirements.txt not found in $PROJECT_DIR. Skipping Python dependency installation.${NC}"
+    log "Ensure required packages (openai, vosk, pvporcupine, sounddevice, etc.) are installed manually."
 fi
 
-# Step 5: Clone or download project files
-log "${BOLD}${GREEN}Step 5: Downloading project files...${NC}"
-USER_REPO_URL=""
-read -p "Enter GitHub repository URL (or press Enter to skip): " USER_REPO_URL
-
-if [ -n "$USER_REPO_URL" ]; then
-    # Clone from GitHub
-    execute "cd $PROJECT_DIR && git clone $USER_REPO_URL ."
+# Step 7: Download Models using model_downloader.py
+log "\n${BOLD}${GREEN}Step 7: Downloading required ML models...${NC}"
+MODEL_DOWNLOADER_SCRIPT="$PROJECT_DIR/model_downloader.py"
+if [ -f "$MODEL_DOWNLOADER_SCRIPT" ]; then
+    log "Running model downloader script (this may take a while)..."
+    # Run the script as the target user within the virtual environment
+    # Pass --non-interactive if needed? Assume interactive for now.
+    execute "sudo -u $INSTALL_USER bash -c 'source $VENV_DIR/bin/activate && python $MODEL_DOWNLOADER_SCRIPT'" "true" # Allow failure if models exist or user cancels
 else
-    # User will copy files manually
-    log "${YELLOW}Skipping repository clone.${NC}"
-    log "Please copy project files to $PROJECT_DIR manually."
+    log "${YELLOW}model_downloader.py not found.${NC}"
+    log "${YELLOW}Manual model download required:${NC}"
+    log " - Vosk: Download model, extract to $PROJECT_DIR/models/vosk/"
+    log " - Piper: Download .onnx and .json files to $PROJECT_DIR/models/piper/"
+    log " - Porcupine: Download .ppn file(s) from Picovoice Console to $PROJECT_DIR/models/porcupine/"
 fi
 
-# Step 6: Install Python dependencies
-log "${BOLD}${GREEN}Step 6: Installing Python dependencies...${NC}"
-execute "cd $PROJECT_DIR && source venv/bin/activate && pip install --upgrade pip"
-execute "cd $PROJECT_DIR && source venv/bin/activate && pip install -r requirements.txt" "continue"
+# Step 8: Configure API Keys and Settings
+log "\n${BOLD}${GREEN}Step 8: Configuration reminder...${NC}"
+# Create .env file if it doesn't exist
+ENV_FILE="$PROJECT_DIR/.env"
+if [ ! -f "$ENV_FILE" ]; then
+    log "Creating .env file template..."
+    cat > "$ENV_FILE" << EOF
+# --- EchoCore Environment Variables ---
+# Required for online features
 
-# Step 7: Download models (placeholder instructions for manual download)
-log "${BOLD}${GREEN}Step 7: Model files information...${NC}"
-log "You need to download the following model files manually:"
-log "${YELLOW}Vosk Model:${NC}"
-log "1. Download a small model from https://alphacephei.com/vosk/models"
-log "   (e.g., vosk-model-small-en-us-0.15)"
-log "2. Extract and place in $PROJECT_DIR/models/vosk/"
-log
-log "${YELLOW}Porcupine Wake Word:${NC}"
-log "1. Get a free Picovoice access key from https://console.picovoice.ai/"
-log "2. Download wake word models (.ppn files) for Raspberry Pi"
-log "3. Place files in $PROJECT_DIR/models/porcupine/"
-log
-log "${YELLOW}Piper TTS (Optional):${NC}"
-log "1. Download voice models from https://huggingface.co/rhasspy/piper-voices/tree/main"
-log "2. Place .onnx and .onnx.json files in $PROJECT_DIR/models/piper/"
-
-# Step 8: Create configuration files
-log "${BOLD}${GREEN}Step 8: Creating configuration files...${NC}"
-if [ ! -f "$PROJECT_DIR/.env" ]; then
-    # Check if .env.example exists first
-    if [ -f "$PROJECT_DIR/.env.example" ]; then
-        execute "cp $PROJECT_DIR/.env.example $PROJECT_DIR/.env"
-        log "Created .env file from .env.example. Please edit with your API keys."
-    else
-        # Create a basic .env file if no example exists
-        cat > "$PROJECT_DIR/.env" << EOF
-# .env file for Project EchoCore
-# Fill in your API keys
-
+# Get from https://platform.openai.com/api-keys
 OPENAI_API_KEY=""
-ELEVENLABS_API_KEY=""
+
+# Get from https://picovoice.ai/console/
 PICOVOICE_ACCESS_KEY=""
+
+# Optional: Get from https://elevenlabs.io/
+ELEVENLABS_API_KEY=""
+
 EOF
-        log "Created .env template file. Please edit with your API keys."
-    fi
+    execute "chown $INSTALL_USER:$INSTALL_USER $ENV_FILE"
+    execute "chmod 600 $ENV_FILE" # Restrict permissions
+    log "${YELLOW}IMPORTANT: Edit $ENV_FILE and add your API keys.${NC}"
 else
-    log ".env file already exists, skipping creation."
+    log ".env file already exists. Ensure API keys are set correctly."
+    # Ensure permissions are restrictive
+    execute "chmod 600 $ENV_FILE" "true"
 fi
 
-# Step 9: Create activation script for easy environment activation
-log "${BOLD}${GREEN}Step 9: Creating activation script...${NC}"
-ACTIVATE_SCRIPT="$PROJECT_DIR/activate_echocore.sh"
-cat > "$ACTIVATE_SCRIPT" << EOF
-#!/bin/bash
-# EchoCore Environment Activation Script
-
-# Activate Python virtual environment
-echo "Activating EchoCore virtual environment..."
-source $PROJECT_DIR/venv/bin/activate
-
-# Set working directory
-cd $PROJECT_DIR
-
-# Display help message
-echo ""
-echo "EchoCore environment activated!"
-echo "You can now run the application with:"
-echo "  python main.py"
-echo ""
-echo "To deactivate the virtual environment, type:"
-echo "  deactivate"
-echo ""
-
-# Execute any additional commands if provided
-if [ \$# -gt 0 ]; then
-    exec "\$@"
+# Remind about user_config.json
+log "User-specific settings can be added to $PROJECT_DIR/user_config.json to override defaults."
+USER_CONFIG_EXAMPLE="$PROJECT_DIR/user_config.json.example"
+USER_CONFIG_FILE="$PROJECT_DIR/user_config.json"
+if [ -f "$USER_CONFIG_EXAMPLE" ] && [ ! -f "$USER_CONFIG_FILE" ]; then
+    log "Copying user_config.json.example to user_config.json..."
+    execute "cp $USER_CONFIG_EXAMPLE $USER_CONFIG_FILE"
+    execute "chown $INSTALL_USER:$INSTALL_USER $USER_CONFIG_FILE"
 fi
-EOF
 
-execute "chmod +x $ACTIVATE_SCRIPT"
-log "Created activation script: $ACTIVATE_SCRIPT"
 
-# Step 10: Setup systemd service for auto-start
-log "${BOLD}${GREEN}Step 10: Setting up systemd service...${NC}"
+# Step 9: Piper TTS Executable Reminder (if needed)
+# Check config if Piper is the selected engine (requires parsing config/user_config - complex for bash)
+# Simpler: Always remind if Piper models directory seems populated or just generally.
+if [ -d "$PROJECT_DIR/models/piper" ] && [ "$(ls -A $PROJECT_DIR/models/piper)" ]; then
+     log "\n${BOLD}${YELLOW}Step 9: Piper TTS Executable Reminder${NC}"
+     log "${YELLOW}If you plan to use Piper TTS (check config), ensure the 'piper' executable is installed${NC}"
+     log "${YELLOW}and available in the system PATH. Installation methods vary; see Piper TTS documentation.${NC}"
+     # Check if 'piper' command exists
+     if command -v piper &> /dev/null; then
+          log "${GREEN}'piper' command found in PATH.${NC}"
+     else
+          log "${RED}'piper' command NOT found in PATH. Manual installation required.${NC}"
+     fi
+fi
+
+
+# Step 10: Setup systemd Service
+log "\n${BOLD}${GREEN}Step 10: Setting up systemd service (echocore.service)...${NC}"
 SERVICE_FILE="/etc/systemd/system/echocore.service"
 
+log "Creating systemd service file at $SERVICE_FILE..."
 cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=Project EchoCore AI Assistant
-After=network.target
+# Wants=network-online.target # Waits for network config
+After=network.target network-online.target sound.target # Start after network and sound system
+# If using X11 for Pygame:
+# Requires=graphical.target
+# After=graphical.target
 
 [Service]
 Type=simple
 User=$INSTALL_USER
+Group=$(id -gn $INSTALL_USER) # Use user's primary group
 WorkingDirectory=$PROJECT_DIR
-Environment=DISPLAY=:0
-ExecStart=$PROJECT_DIR/venv/bin/python main.py
-Restart=on-failure
-RestartSec=5
+# Environment="DISPLAY=:0" # Uncomment if Pygame requires X11 display
+# Environment="PA_ALSA_PLUGHW=1" # Potential ALSA/PulseAudio fix if needed
+# Environment="PYTHONUNBUFFERED=1" # Ensure logs appear immediately
+ExecStart=$VENV_DIR/bin/python $PROJECT_DIR/main.py
+Restart=on-failure # Restart if it fails
+RestartSec=10      # Wait 10s before restarting
+# StandardOutput=append:$PROJECT_DIR/logs/echocore_stdout.log # Optional: Redirect stdout
+# StandardError=append:$PROJECT_DIR/logs/echocore_stderr.log  # Optional: Redirect stderr
+# Consider resource limits if needed:
+# LimitNOFILE=65536
+# CPUQuota=80%
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target # Start on normal boot
+# If using X11 for Pygame:
+# WantedBy=graphical.target
 EOF
 
 execute "chmod 644 $SERVICE_FILE"
 execute "systemctl daemon-reload"
-log "Systemd service created. You can start it with: sudo systemctl start echocore"
-log "To enable autostart at boot: sudo systemctl enable echocore"
+log "Systemd service created."
+log "To enable auto-start on boot: sudo systemctl enable echocore.service"
+log "To start the service now: sudo systemctl start echocore.service"
+log "To check status: sudo systemctl status echocore.service"
+log "To view logs: sudo journalctl -u echocore.service -f"
 
-# Step 11: Setup permissions
-log "${BOLD}${GREEN}Step 11: Setting permissions...${NC}"
+
+# Step 11: Final Permissions
+log "\n${BOLD}${GREEN}Step 11: Setting final permissions...${NC}"
 execute "chown -R $INSTALL_USER:$INSTALL_USER $PROJECT_DIR"
+# Ensure log directory is writable by the user
+execute "chown -R $INSTALL_USER:$INSTALL_USER $PROJECT_DIR/logs" || true # Allow failure if dir doesn't exist yet
 
-# Step 12: Create simple uninstall script (optional)
-log "${BOLD}${GREEN}Step 12: Creating uninstall script...${NC}"
-UNINSTALL_SCRIPT="$PROJECT_DIR/uninstall_echocore.sh"
-cat > "$UNINSTALL_SCRIPT" << EOF
-#!/bin/bash
-# EchoCore Uninstall Script
 
-echo "This script will remove EchoCore from your system."
-echo "WARNING: This will delete all project files, models, and configuration."
-read -p "Are you sure you want to proceed? (y/n) " -n 1 -r
-echo
-if [[ ! \$REPLY =~ ^[Yy]$ ]]; then
-    echo "Uninstall cancelled."
-    exit 0
-fi
+# --- Completion ---
+log "\n${BOLD}${GREEN}--- EchoCore Installation Completed ---${NC}"
+log ""
+log "${BOLD}Next Steps:${NC}"
+log " 1. ${YELLOW}Edit '$PROJECT_DIR/.env'${NC} to add your required API keys."
+log " 2. Review '$PROJECT_DIR/user_config.json' for any desired setting overrides."
+log " 3. Ensure required models (Vosk, Piper, Porcupine) are in '$PROJECT_DIR/models/'."
+log "    (Run 'python model_downloader.py' again if needed)."
+log " 4. If using Piper TTS, ensure the 'piper' executable is installed and in the PATH."
+log " 5. Enable the service to start on boot: ${BOLD}sudo systemctl enable echocore.service${NC}"
+log " 6. Start the service: ${BOLD}sudo systemctl start echocore.service${NC}"
+log " 7. Check the status and logs:"
+log "    - ${BOLD}sudo systemctl status echocore.service${NC}"
+log "    - ${BOLD}sudo journalctl -u echocore.service -f${NC}"
+log "    - Or check files in '$PROJECT_DIR/logs/'"
+log ""
+log "If using the Web Interface (check config), access it at: http://<your-pi-ip>:<port>"
+log ""
+log "${GREEN}Installation successful!${NC}"
 
-echo "Stopping EchoCore service..."
-sudo systemctl stop echocore
-sudo systemctl disable echocore
-
-echo "Removing systemd service..."
-sudo rm -f /etc/systemd/system/echocore.service
-sudo systemctl daemon-reload
-
-echo "Removing project directory..."
-sudo rm -rf $PROJECT_DIR
-
-echo "EchoCore has been uninstalled."
-EOF
-
-execute "chmod +x $UNINSTALL_SCRIPT"
-execute "chown $INSTALL_USER:$INSTALL_USER $UNINSTALL_SCRIPT"
-log "Created uninstall script: $UNINSTALL_SCRIPT"
-
-# Final instructions
-log "${BOLD}${GREEN}Installation completed!${NC}"
-log
-log "${BOLD}Next steps:${NC}"
-log "1. Edit $PROJECT_DIR/.env to add your API keys"
-log "2. Download model files as described above"
-log "3. Test the application with:"
-log "   source $ACTIVATE_SCRIPT"
-log "   python main.py"
-log
-log "4. Once tested, enable the service: sudo systemctl enable echocore"
-log
-log "${BOLD}${BLUE}Thank you for installing Project EchoCore!${NC}"
+exit 0
