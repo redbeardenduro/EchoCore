@@ -62,8 +62,9 @@ class AudioOutputHandler(threading.Thread):
 
                                 # Calculate amplitude for avatar [14, 34, 18]
                                 amplitude = np.sqrt(np.mean(numpy_chunk.astype(np.float32)**2))
-                                # Normalize amplitude (simple approach, needs tuning)
-                                normalized_amplitude = min(amplitude / (2**10), 1.0) # Adjust divisor based on testing
+                                
+                                # Normalize amplitude using config parameter instead of hardcoded value
+                                normalized_amplitude = min(amplitude / config.AUDIO_AMPLITUDE_SCALING_DIVISOR, 1.0)
                                 self.avatar_queue.put(normalized_amplitude)
                             else:
                                 self.avatar_queue.put(0.0) # Send zero if chunk empty
