@@ -5,22 +5,22 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>EchoCore Logs</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" integrity="sha512-9usAa10IRO0HhonpyAIVpjrylPvoDwiPUiKdWk5t3PyolY1cOd4DSE0Ga+ri4AuTroPR5aQvXU9xC6qOPnzFeg==" crossorigin="anonymous" referrerpolicy="no-referrer" />
 </head>
 <body>
     <header>
         <div class="container">
-            <h1><i class="fas fa-list"></i> EchoCore Logs</h1>
+            <h1><i class="fa-solid fa-list-ul"></i> EchoCore Logs</h1>
         </div>
     </header>
     <nav>
         <div class="container">
-            <a href="{{ url_for('index') }}"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
-            <a href="{{ url_for('settings') }}"><i class="fas fa-cogs"></i> Settings</a>
-            <a href="{{ url_for('logs') }}"><i class="fas fa-list"></i> Logs</a>
+            <a href="{{ url_for('index') }}"><i class="fa-solid fa-gauge-high"></i> Dashboard</a>
+            <a href="{{ url_for('settings') }}"><i class="fa-solid fa-gears"></i> Settings</a>
+            <a href="{{ url_for('logs') }}"><i class="fa-solid fa-list-ul"></i> Logs</a>
         </div>
     </nav>
-    
+
     <div class="container">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -29,144 +29,186 @@
                 {% endfor %}
             {% endif %}
         {% endwith %}
-        
+
         <div class="card">
-            <h2>System Logs</h2>
-            
+            <h2><i class="fa-solid fa-file-lines"></i> System Logs</h2>
+
             <div class="filter-controls">
-                <select id="log-level" onchange="filterLogs()">
+                <label for="log-level" class="sr-only">Filter by Level:</label> <select id="log-level" onchange="filterLogs()">
                     <option value="all">All Levels</option>
                     <option value="debug">Debug</option>
                     <option value="info">Info</option>
                     <option value="warning">Warning</option>
                     <option value="error">Error</option>
-                </select>
-                
-                <input type="text" id="log-filter" placeholder="Filter by keyword..." onkeyup="filterLogs()">
-                
-                <button onclick="refreshLogs()" class="btn"><i class="fas fa-sync"></i> Refresh</button>
-                <button onclick="clearLogsDisplay()" class="btn"><i class="fas fa-eraser"></i> Clear Display</button>
-                <a href="{{ url_for('download_logs') }}" class="btn"><i class="fas fa-download"></i> Download</a>
+                    <option value="critical">Critical</option> </select>
+
+                <label for="log-filter" class="sr-only">Filter by Keyword:</label> <input type="text" id="log-filter" placeholder="Filter by keyword..." onkeyup="filterLogs()">
+
+                <button type="button" onclick="refreshLogs()" class="btn"><i class="fa-solid fa-rotate-right"></i> Refresh</button>
+                <button type="button" onclick="clearLogsDisplay()" class="btn btn-warning"><i class="fa-solid fa-eraser"></i> Clear Display</button>
+                <a href="{{ url_for('download_logs') }}" class="btn btn-secondary"><i class="fa-solid fa-download"></i> Download Log File</a>
             </div>
-            
+
             <div class="log-container" id="log-container">
                 {% for log in logs %}
                     <pre class="log-line log-{{ log.level_class }}">{{ log.timestamp }} [{{ log.level }}] {{ log.message }}</pre>
+                {% else %}
+                    <pre class="log-line log-info">No log entries found.</pre>
                 {% endfor %}
             </div>
-            
+
             <div class="auto-refresh">
-                <label>
-                    <input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()">
-                    Auto-refresh logs every 
-                    <select id="refresh-interval" onchange="updateRefreshInterval()">
-                        <option value="5">5</option>
-                        <option value="10" selected>10</option>
-                        <option value="30">30</option>
-                        <option value="60">60</option>
-                    </select>
-                    seconds
+                <label for="auto-refresh"> <input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()">
+                    Auto-refresh logs every
                 </label>
+                <label for="refresh-interval" class="sr-only">Refresh Interval:</label> <select id="refresh-interval" onchange="updateRefreshInterval()">
+                    <option value="5">5</option>
+                    <option value="10" selected>10</option>
+                    <option value="30">30</option>
+                    <option value="60">60</option>
+                </select>
+                seconds
             </div>
         </div>
     </div>
-    
+
     <script>
         let refreshTimer = null;
-        let lastLogCount = {{ logs|length }};
-        
+        // Initialize with the count rendered by Flask, ensure logs is defined even if empty
+        let lastLogTimestamp = "{{ logs[-1].timestamp if logs else 'none' }}"; // Track last timestamp instead of count
+
         // Function to filter logs based on level and keyword
         function filterLogs() {
             const level = document.getElementById('log-level').value;
             const keyword = document.getElementById('log-filter').value.toLowerCase();
-            const logs = document.querySelectorAll('.log-line');
-            
+            const logContainer = document.getElementById('log-container');
+            const logs = logContainer.querySelectorAll('.log-line');
+
             logs.forEach(log => {
                 const logText = log.textContent.toLowerCase();
+                // Check class list for level, more robust than just checking class name string
                 const showByLevel = level === 'all' || log.classList.contains('log-' + level);
                 const showByKeyword = keyword === '' || logText.includes(keyword);
-                
+
                 if (showByLevel && showByKeyword) {
-                    log.style.display = 'block';
+                    log.style.display = 'block'; // Use block display for pre elements
                 } else {
                     log.style.display = 'none';
                 }
             });
         }
-        
-        // Function to clear the logs display
+
+        // Function to clear the logs display (client-side only)
         function clearLogsDisplay() {
-            if (confirm('Are you sure you want to clear the logs display? This does not delete log files.')) {
-                document.getElementById('log-container').innerHTML = '';
-                lastLogCount = 0;
+            if (confirm('Are you sure you want to clear the logs currently displayed? This does not delete the actual log file.')) {
+                document.getElementById('log-container').innerHTML = '<pre class="log-line log-info">Log display cleared.</pre>';
+                lastLogTimestamp = 'none'; // Reset timestamp tracking
             }
         }
-        
-        // Function to refresh logs via AJAX
+
+        // Function to refresh logs via AJAX using the /api/logs endpoint
         function refreshLogs() {
-            fetch('/api/logs?count=100')
-                .then(response => response.json())
+            // Fetch logs since the last known timestamp, or all if none known
+            // The backend API would need to support this 'since' parameter.
+            // For simplicity, we stick to the original 'fetch last N' approach for now.
+            // const apiURL = `/api/logs?count=100&since=${encodeURIComponent(lastLogTimestamp)}`;
+            const apiURL = '/api/logs?count=200'; // Fetch last 200 lines
+
+            fetch(apiURL)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error! status: ${response.status}`);
+                    }
+                    return response.json();
+                })
                 .then(data => {
                     const container = document.getElementById('log-container');
-                    const logs = data.logs;
-                    
-                    // Only completely replace if we have new logs
-                    if (logs.length !== lastLogCount) {
-                        container.innerHTML = '';
-                        logs.forEach(log => {
-                            const logElement = document.createElement('pre');
-                            logElement.className = `log-line log-${log.level_class}`;
-                            logElement.textContent = `${log.timestamp} [${log.level}] ${log.message}`;
-                            container.appendChild(logElement);
-                        });
-                        lastLogCount = logs.length;
-                        
-                        // Apply filters to new logs
-                        filterLogs();
-                        
-                        // Scroll to bottom of log container
-                        container.scrollTop = container.scrollHeight;
+                    const fetchedLogs = data.logs || []; // Ensure logs is an array
+
+                    if (fetchedLogs.length > 0) {
+                         const latestTimestamp = fetchedLogs[fetchedLogs.length - 1].timestamp;
+
+                        // Only update if the latest log is newer than what we currently have
+                        if (latestTimestamp !== lastLogTimestamp) {
+                             container.innerHTML = ''; // Clear current logs
+                             fetchedLogs.forEach(log => {
+                                const logElement = document.createElement('pre');
+                                // Use classList for adding multiple classes
+                                logElement.classList.add('log-line', `log-${log.level_class}`);
+                                logElement.textContent = `${log.timestamp} [${log.level}] ${log.message}`;
+                                container.appendChild(logElement);
+                             });
+                             lastLogTimestamp = latestTimestamp; // Update last known timestamp
+
+                             // Re-apply filters to the newly loaded logs
+                             filterLogs();
+
+                             // Scroll to bottom only if auto-scroll is desired (can be annoying)
+                             // Consider adding a checkbox to control auto-scrolling
+                             container.scrollTop = container.scrollHeight;
+                         } else {
+                              console.log("No new log entries found based on timestamp.");
+                         }
+                    } else {
+                        // Handle case where API returns empty logs (e.g., after clearing)
+                         if (lastLogTimestamp !== 'none') { // Avoid clearing if already empty/cleared
+                            container.innerHTML = '<pre class="log-line log-info">No log entries found.</pre>';
+                            lastLogTimestamp = 'none';
+                         }
                     }
                 })
                 .catch(error => {
                     console.error('Error refreshing logs:', error);
+                    // Display error in the log container?
+                    // container.innerHTML = `<pre class="log-line log-error">Error refreshing logs: ${error.message}</pre>`;
                 });
         }
-        
-        // Function to toggle auto-refresh
+
+        // Function to toggle auto-refresh timer
         function toggleAutoRefresh() {
-            const autoRefresh = document.getElementById('auto-refresh').checked;
-            
-            if (autoRefresh) {
-                updateRefreshInterval();
+            const autoRefreshCheckbox = document.getElementById('auto-refresh');
+            if (autoRefreshCheckbox.checked) {
+                updateRefreshInterval(); // Start timer with current interval
             } else {
-                clearInterval(refreshTimer);
-                refreshTimer = null;
+                if (refreshTimer !== null) {
+                    clearInterval(refreshTimer);
+                    refreshTimer = null;
+                    console.log("Auto-refresh disabled.");
+                }
             }
         }
-        
-        // Function to update refresh interval
+
+        // Function to update refresh interval and reset timer
         function updateRefreshInterval() {
-            const intervalSeconds = parseInt(document.getElementById('refresh-interval').value);
-            
-            // Clear existing timer
-            if (refreshTimer) {
+            const intervalSelect = document.getElementById('refresh-interval');
+            const intervalSeconds = parseInt(intervalSelect.value, 10);
+
+            // Clear existing timer before setting a new one
+            if (refreshTimer !== null) {
                 clearInterval(refreshTimer);
             }
-            
-            // Set new timer if auto-refresh is enabled
-            if (document.getElementById('auto-refresh').checked) {
+
+            // Set new timer only if auto-refresh is checked
+            if (document.getElementById('auto-refresh').checked && intervalSeconds > 0) {
                 refreshTimer = setInterval(refreshLogs, intervalSeconds * 1000);
+                console.log(`Auto-refresh interval set to ${intervalSeconds} seconds.`);
+            } else {
+                 refreshTimer = null; // Ensure timer is null if checkbox is off or interval is invalid
             }
         }
-        
+
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             // Scroll to bottom of log container initially
             const container = document.getElementById('log-container');
-            container.scrollTop = container.scrollHeight;
-            
-            // Set up auto-refresh
+            if (container) {
+                container.scrollTop = container.scrollHeight;
+            }
+
+            // Apply initial filter settings (if any were preserved, e.g., via URL params - not implemented here)
+            filterLogs();
+
+            // Set up auto-refresh based on initial checkbox state
             toggleAutoRefresh();
         });
     </script>
