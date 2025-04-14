@@ -1,320 +1,310 @@
 # Project EchoCore (Enhanced)
-### Voice-Driven, Holographic-Style Smart AI Interface
+
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+A voice-driven, modular, AI assistant interface featuring wake word detection, STT, LLM interaction, TTS, and a dynamic visual avatar. This enhanced version includes improved robustness, configuration options, a web interface, and more flexible components.
 
 ---
 
 ## Overview
 
-Project EchoCore is a self-contained, AI-powered personal assistant terminal inspired by Cortana from the Halo franchise. It features natural voice interaction, powered by cloud or local AI models, and a dynamic visual avatar projected onto a screen. 
+Project EchoCore is designed as a modular framework for creating a personal AI assistant, drawing inspiration from concepts like Cortana (Halo) or Jarvis (Iron Man). It uses a wake word to activate, listens for commands, processes them using local or cloud-based AI models, synthesizes a spoken response, and displays a dynamic visual avatar.
 
-This enhanced version introduces improvements to the original implementation including:
-- Better error handling and recovery mechanisms
-- Enhanced visual avatar with sophisticated animations
-- Audio feedback cues for improved user experience
-- Conversation history for context-aware interactions
-- Improved configuration options and user customization
-- Automatic reconnection for cloud services
-- Flexible logging with rotation
-- Thread monitoring with watchdog functionality
-- Web-based configuration interface
-- Improved particle and glow layering in avatar display
-- Auto-download options for required models
+This enhanced version builds upon the original concept with significant improvements:
+
+* **Modular Architecture:** Clearly defined components for audio I/O, STT, LLM, TTS, state management, avatar display, and web UI.
+* **Improved Configuration:** Centralized configuration (`config.py`) with user overrides via `user_config.json`.
+* **Enhanced Error Handling:** Better exception handling, thread monitoring, and automatic reconnection attempts for cloud services.
+* **Web Interface:** A Flask-based dashboard for monitoring status, viewing logs, adjusting settings, and performing basic actions.
+* **Conversation History:** The LLM handler maintains context across multiple turns in a conversation.
+* **Flexible TTS:** Supports OpenAI, ElevenLabs, and local Piper TTS engines. Includes streaming support.
+* **Enhanced Avatar:** Multiple animation styles (`circle`, `wave`, `particle`, `hologram`) reacting to state and audio amplitude.
+* **Model Downloader:** Utility script (`model_downloader.py`) to simplify fetching required Vosk and Piper models.
+* **Audio Cues:** Optional sound feedback for events like wake word detection.
+* **Robust Installation:** Improved installation script (`install.sh`) for Debian-based systems.
 
 ## Features
 
-- **Wake Word Detection**: Using Picovoice Porcupine with configurable sensitivity
-- **Speech-to-Text (STT)**: Using the offline Vosk engine with confidence thresholds
-- **Language Model (LLM)**: Interaction via OpenAI API (GPT-4o/mini) with basic offline fallback
-- **Text-to-Speech (TTS)**: Using configurable engines:
-  - OpenAI API with streaming support
-  - ElevenLabs API with voice customization
-  - Local Piper TTS for offline operation
-- **Real-time Audio Feedback**: Audio cues to indicate system state changes
-- **Enhanced Visual Avatar**: Dynamic animations synchronized with audio and system state
-- **Conversation Context**: Maintains dialogue history for more natural interactions
-- **Error Recovery**: Automatic reconnection and fallback mechanisms
-- **Logging & Monitoring**: Comprehensive logging with rotation to prevent disk space issues
-- **Web Interface**: Browser-based configuration and monitoring dashboard
+* **Wake Word Detection:** Picovoice Porcupine engine (requires free Picovoice account/key).
+* **Speech-to-Text (STT):** Vosk offline engine with configurable confidence threshold.
+* **Language Model (LLM):** OpenAI API (configurable model like GPT-4o-mini) with conversation history and optional offline fallback response.
+* **Text-to-Speech (TTS):** Configurable engine:
+    * OpenAI TTS (Cloud, requires API key)
+    * ElevenLabs TTS (Cloud, requires API key)
+    * Piper TTS (Local, requires Piper executable and voice models)
+    * Supports streaming playback where available.
+* **Audio Handling:** Uses `sounddevice` for audio input/output with device selection.
+* **Visual Avatar:** Real-time dynamic avatar rendered using `pygame` with multiple styles.
+* **State Management:** Robust, thread-safe state machine manages application flow.
+* **Web Dashboard:** Monitor status, view/filter/download logs, change settings, test audio, trigger actions.
+* **Configuration:** Defaults in `config.py`, user overrides in `user_config.json`, API keys in `.env`.
+* **Logging:** Comprehensive logging with rotation via `RotatingFileHandler`.
 
 ## Prerequisites
 
-### Hardware
+### Hardware (Recommended)
 
-- Raspberry Pi 5 (8GB recommended)
-- Reliable Power Supply for RPi 5 (Official 27W recommended)
-- MicroSD Card (128GB, A2-rated recommended) or NVMe SSD
-- Active Cooler for RPi 5 (Essential)
-- USB Microphone (Ensure compatibility, e.g., Samson Go Mic, SunFounder Mini Mic)
-- USB Speakers or Speakers with 3.5mm jack
-- Mini Projector with HDMI input (e.g., Kodak Luma 150, AAXA P8 Mini)
-- Micro-HDMI to HDMI cable/adapter
-- Frosted Acrylic Sheet (for projection)
-- Mount/Stand for Acrylic Sheet (45-degree angle needed)
-- (Optional but Recommended) Development Computer for easier setup/coding
+* Raspberry Pi 4 (4GB+) or Raspberry Pi 5 (Performance significantly better on RPi 5).
+* Reliable Power Supply (Official RPi PSU recommended).
+* MicroSD Card (32GB+ recommended, A1/A2 rated) or NVMe SSD (for RPi 5).
+* Active Cooler/Fan (Especially for RPi 5).
+* USB Microphone (Ensure Linux compatibility, e.g., ReSpeaker, Blue Snowball, basic USB mics).
+* Speakers (USB, 3.5mm jack, or HDMI audio via display).
+* (Optional) Display for Avatar: Monitor, small LCD, or mini projector. Requires appropriate connection (e.g., HDMI, Micro-HDMI).
+* (Optional) Frosted Acrylic/Screen: If using a projector for a "holographic" effect.
+* Development Computer: For easier setup, coding, and SSH access.
 
 ### Software
 
-- Raspberry Pi OS Lite (64-bit, Bookworm recommended) installed on the SD card/SSD. Headless setup is sufficient
-- Python 3.8 or newer
-- pip (Python package installer)
-- git (for cloning the repository)
-- SSH client on your development computer for connecting to the Raspberry Pi
+* OS: Raspberry Pi OS (64-bit recommended, Lite or Desktop), or other Debian-based Linux distribution.
+* Python: 3.8 or newer (check specific library compatibilities if using older versions).
+* `pip` (Python package installer).
+* `git` (for cloning the repository).
+* System build tools (`python3-dev`, `build-essential` often useful).
+* Audio System: ALSA / PulseAudio correctly configured. `portaudio19-dev`, `libasound2-dev`.
+* (Optional) Piper TTS Executable: Must be installed separately if using Piper TTS.
 
 ### API Keys & Accounts
 
-You will need accounts and API keys for the following services (depending on your configuration):
-- Picovoice: For Porcupine wake word detection (free tier available)
-- OpenAI: For GPT-4o/mini LLM and/or OpenAI TTS
-- ElevenLabs: (Optional) If using ElevenLabs TTS
+* **Picovoice Account:** Required for `PICOVOICE_ACCESS_KEY` (wake word detection). Free tier available. [console.picovoice.ai](https://console.picovoice.ai/)
+* **OpenAI Account:** Required for `OPENAI_API_KEY` if using OpenAI for LLM or TTS. [platform.openai.com](https://platform.openai.com/)
+* **ElevenLabs Account:** (Optional) Required for `ELEVENLABS_API_KEY` if using ElevenLabs TTS. [elevenlabs.io](https://elevenlabs.io/)
 
 ## Setup Instructions
 
-These instructions assume you are running commands on the Raspberry Pi (either directly or via SSH).
+These instructions are primarily for Raspberry Pi OS or similar Debian-based systems.
 
 ### 1. Clone Repository
 
 ```bash
-git clone <repository_url>
-cd project_echocore
-```
+# Choose a suitable location, e.g., home directory
+cd ~
+git clone <repository_url> # Replace with your repo URL if you forked
+cd project_echocore # Or your repository's directory name
+2. Run Installation Script (Recommended)
+The provided script automates dependency installation, directory setup, and service configuration.
 
-### 2. Install System Dependencies
+Bash
 
-```bash
-sudo apt update
-sudo apt install -y portaudio19-dev libasound2-dev git python3-pip python3-venv
-# Add any other system dependencies needed, e.g., for Piper TTS
-```
+# Navigate to the cloned directory
+cd ~/project_echocore # Or your directory
 
-### 3. Create Python Virtual Environment
+# Run the script with sudo
+sudo bash install.sh
+The script will:
 
-```bash
+Update system packages.
+Install required system libraries (git, python3, pip, venv, portaudio, libasound, Pygame deps).
+Create necessary directories (/opt/echocore by default, models, logs, cache, static, templates).
+Set up a Python virtual environment (/opt/echocore/venv).
+Install Python packages from requirements.txt into the venv.
+Attempt to run model_downloader.py.
+Create a .env template file for API keys.
+Create a systemd service file (echocore.service).
+Set appropriate permissions.
+Review the script output carefully, especially regarding user detection, dependencies, and any warnings.
+
+3. Manual Setup (Alternative)
+If you prefer not to use the script:
+
+Bash
+
+# 1. Update System
+sudo apt update && sudo apt upgrade -y
+
+# 2. Install System Dependencies
+sudo apt install -y git python3-pip python3-venv python3-dev portaudio19-dev libasound2-dev libsdl2-dev libsdl2-image-dev libsdl2-mixer-dev libsdl2-ttf-dev
+
+# 3. Create Directories
+mkdir -p models/vosk models/porcupine models/piper logs cache static templates
+
+# 4. Create Virtual Environment
 python3 -m venv venv
 source venv/bin/activate
-```
 
-### 4. Install Python Dependencies
-
-```bash
+# 5. Install Python Dependencies
+pip install --upgrade pip
 pip install -r requirements.txt
-```
 
-### 5. Download Models
+# 6. Deactivate (optional for now)
+# deactivate
+4. Configure API Keys
+Create or edit the .env file in the project root:
 
-Download the necessary pre-trained models and place them in the correct subdirectories within the `models/` folder:
+Bash
 
-#### Automated Model Download (New!)
-You can use the model downloader utility to automatically download required models:
+cp .env.example .env # If .env.example exists and .env doesn't
+nano .env # Or use your preferred editor
+Add your actual API keys obtained from Picovoice, OpenAI, and ElevenLabs (if using):
 
-```bash
-python model_downloader.py
-```
+Code snippet
 
-This will check for missing models and download them interactively.
+# --- EchoCore Environment Variables ---
 
-#### Manual Download
-
-##### Vosk
-Download a language model (e.g., `vosk-model-small-en-us-0.15` from https://alphacephei.com/vosk/models). Extract it and place the model directory inside `models/vosk/`.
-
-##### Porcupine
-Download the common model file (`.pv`) and your desired keyword file(s) (`.ppn`) from the Picovoice Console or the Porcupine GitHub repository. Place them in `models/porcupine/`.
-
-##### Piper TTS (Optional)
-If using Piper, download the voice `.onnx` and `.onnx.json` files from https://huggingface.co/rhasspy/piper-voices/tree/main. Place them in `models/piper/`.
-
-### 6. Configure API Keys
-
-Create a `.env` file in the project root directory:
-
-```bash
-cp .env.example .env
-```
-
-Edit the `.env` file and add your actual API keys:
-
-```
+# Get from [https://platform.openai.com/api-keys](https://platform.openai.com/api-keys)
 OPENAI_API_KEY="sk-..."
-ELEVENLABS_API_KEY="..."
+
+# Get from [https://picovoice.ai/console/](https://picovoice.ai/console/)
 PICOVOICE_ACCESS_KEY="..."
-```
 
-### 7. Configure Application Settings
+# Optional: Get from [https://elevenlabs.io/](https://elevenlabs.io/)
+ELEVENLABS_API_KEY="..."
+Important: Keep this file secure and do not commit it to public repositories (.gitignore should prevent this). Set permissions: chmod 600 .env.
 
-Edit the `config.py` file to adjust settings as needed. The enhanced config includes many new options for customizing the behavior of EchoCore.
+5. Download Models
+The easiest way is using the provided script (ensure the virtual environment is active):
 
-Alternatively, create a `user_config.json` file to override specific settings without modifying the main configuration file:
+Bash
 
-```json
-{
-  "AVATAR_WINDOW_WIDTH": 1024,
-  "AVATAR_WINDOW_HEIGHT": 768,
-  "AVATAR_ANIMATION_STYLE": "hologram",
-  "AUDIO_INPUT_DEVICE_INDEX": 1,
-  "AUDIO_OUTPUT_DEVICE_INDEX": 0,
-  "AVATAR_DEBUG_OVERLAY": true
-}
-```
+# Activate venv if not already active
+source venv/bin/activate # Or /opt/echocore/venv/bin/activate if using install script location
 
-## Running the Application
+# Run the downloader
+python model_downloader.py
+This script will check config.py for the required Vosk/Piper models and download missing ones interactively.
 
-Ensure your virtual environment is activated, then run the main script:
+Manual Download (Fallback):
 
-```bash
-source venv/bin/activate
-python main.py
-```
+Vosk: Download a model (e.g., vosk-model-small-en-us-0.15) from alphacephei.com/vosk/models. Extract the archive. Ensure the contents of the extracted folder (containing am, conf, etc.) are placed inside models/vosk/<model_name>/. Update VOSK_MODEL_PATH in config.py or user_config.json if needed.
+Piper TTS: (If using) Download the desired voice .onnx and .onnx.json files from Hugging Face Piper Voices. Place them in models/piper/. Update PIPER_MODEL_PATH in config if needed. Crucially, install the Piper executable separately following its official instructions.
+Porcupine: Go to Picovoice Console. Create or select a wake word (.ppn file) for your target platform (e.g., Raspberry Pi). Download the .ppn file(s). Place them in models/porcupine/. Update the PORCUPINE_KEYWORD_PATHS list in config.py or user_config.json with the correct file path(s).
+6. Configure Application Settings
+Review config.py for default settings. To customize without editing config.py, create/edit user_config.json in the project root. Add only the keys you want to override. See user_config.json.example for format and examples.
 
-The application will start, initialize all components, and begin listening for the wake word. The Pygame window displaying the enhanced avatar will appear.
+Key settings to check:
 
-If you've enabled the web interface, you can access it at `http://your_pi_ip:8080`.
+AUDIO_INPUT_DEVICE_INDEX, AUDIO_OUTPUT_DEVICE_INDEX (use null for default)
+PORCUPINE_KEYWORD_PATHS, PORCUPINE_SENSITIVITIES
+VOSK_MODEL_PATH
+TTS_ENGINE and the corresponding settings (e.g., PIPER_MODEL_PATH if using Piper).
+AVATAR_* settings for visual customization.
+WEB_INTERFACE_* settings to enable/configure the web dashboard.
+Running the Application
+Direct Execution (for Testing/Development)
+Navigate to the project directory: cd /path/to/project_echocore
+Activate the virtual environment: source venv/bin/activate
+Run the main script: python main.py
+The application will start, initialize components, and log output to the console and the logs/echocore.log file. If the avatar is enabled, the Pygame window should appear. If the web interface is enabled, access it via http://<your_pi_ip>:<port> (e.g., http://192.168.1.100:8080).
 
-## Enhanced Project Structure
+Press Ctrl+C in the terminal to stop the application gracefully.
 
-```
+Running as a Service (Recommended for Deployment)
+If you used install.sh, the echocore.service unit should be configured.
+
+Enable auto-start on boot: sudo systemctl enable echocore.service
+Start the service manually: sudo systemctl start echocore.service
+Stop the service: sudo systemctl stop echocore.service
+Check service status: sudo systemctl status echocore.service
+View live logs: sudo journalctl -u echocore.service -f
+Enhanced Project Structure
 project_echocore/
-├── main.py                 # Main application with health monitoring and watchdog
-├── config.py               # Enhanced configuration with validation
-├── state_manager.py        # Manages application state with error tracking
-├── audio_input.py          # Handles microphone input & wake word with audio cues
-├── audio_output.py         # Plays audio with amplitude calculation
-├── audio_utils.py          # Utilities for audio device management
-├── stt_processor.py        # Processes audio with confidence scoring
-├── llm_handler.py          # Interacts with LLM with conversation history
-├── tts_synthesizer.py      # Synthesizes speech with streaming support
-├── piper_tts.py            # Dedicated class for Piper TTS functionality
-├── avatar_display.py       # Enhanced avatar with advanced animations
-├── web_interface.py        # Web-based dashboard for monitoring and configuration
-├── model_downloader.py     # Utility for downloading required model files
+├── main.py                 # Main application logic, thread management
+├── config.py               # Default configuration settings
+├── user_config.json.example # Example for user overrides
+├── user_config.json        # Optional user overrides (ignored by git)
+├── .env.example            # Example for environment variables
+├── .env                    # Environment variables (API keys - ignored by git)
+├── state_manager.py        # Manages application state (State Enum)
+├── audio_input.py          # Handles microphone input & wake word (Porcupine)
+├── audio_output.py         # Plays synthesized audio & calculates amplitude
+├── audio_utils.py          # Utilities for audio device listing/testing
+├── stt_processor.py        # Speech-to-Text processing (Vosk)
+├── llm_handler.py          # Language Model interaction (OpenAI) & history
+├── tts_synthesizer.py      # Text-to-Speech synthesis (OpenAI/ElevenLabs/Piper)
+├── piper_tts.py            # Client wrapper for Piper TTS executable
+├── avatar_display.py       # Visual avatar rendering (Pygame)
+├── web_interface.py        # Web dashboard implementation (Flask)
+├── model_downloader.py     # Utility for downloading Vosk/Piper models
 ├── requirements.txt        # Python package dependencies
-├── install.sh              # Installation script with virtual environment support
-├── .env.example            # Example environment file for API keys
-├── user_config.json        # Optional user configuration overrides
-├── logs/                   # Directory for log files with rotation
-├── cache/                  # Cache for TTS responses to reduce API usage
-├── static/                 # Static assets for web interface
-├── templates/              # HTML templates for web interface
-└── models/                 # Directory for local models
-    ├── vosk/               # Vosk model files
-    ├── piper/              # Piper voice files
-    └── porcupine/          # Porcupine keyword & model files
-```
+├── install.sh              # Installation script for Debian-based systems
+├── uninstall_echocore.sh   # Script to uninstall the service and files (Use with caution!)
+├── README.md               # This file
+├── Implementation_Plan.md  # Summary of enhancements applied
+├── .gitignore              # Specifies files/dirs for Git to ignore
+├── logs/                   # Directory for log files (ignored by git)
+│   └── echocore.log        # Main log file (rotates)
+├── cache/                  # Directory for caching (e.g., TTS audio - ignored by git)
+├── static/                 # Static assets for web interface (CSS, JS, images)
+│   ├── style.css
+│   ├── index.html          # Note: HTML files now served via Flask templates folder
+│   ├── logs.html           #  "
+│   ├── settings.html       #  "
+│   └── favicon.ico
+├── templates/              # HTML templates for Flask web interface
+│   ├── index.html
+│   ├── logs.html
+│   └── settings.html
+└── models/                 # Directory for local models (ignored by git by default)
+    ├── vosk/               # Vosk model files go here
+    ├── piper/              # Piper voice files (.onnx, .json) go here
+    └── porcupine/          # Porcupine keyword (.ppn) and model (.pv) files go here
+(Note: HTML files were moved from static/ to templates/ as per Flask convention).
 
-## New Features and Improvements
-
-### Conversation History
-The LLM handler now maintains conversation context, allowing for more natural multi-turn interactions. The system remembers previous exchanges, enabling it to understand references to earlier parts of the conversation.
-
-### Enhanced Avatar Visualization
-The avatar display now features multiple animation styles based on the current state:
-- **Idle**: Gentle pulsing effect with subtle glow
-- **Listening**: Expanding ripple effect
-- **Thinking**: Orbiting particles around the central circle
-- **Speaking**: Audio-reactive wave visualization
-- **Error**: Warning indicators with animation
-
-Available styles include:
-- `circle`: Simple circular avatar with glow effects
-- `wave`: Audio-reactive wave rings
-- `particle`: Advanced particle system with alpha blending
-- `hologram`: Sci-fi holographic style with scan lines and glitches
-
-### Audio Feedback
-Audio cues now provide immediate feedback when:
-- Wake word is detected
-- Listening times out
-- System encounters an error
-
-### Improved Error Handling
-- Automatic reconnection to cloud services
-- Graceful degradation when services are unavailable
-- Comprehensive logging with rotation
-- Thread watchdog monitoring to detect and recover from failures
-
-### Web Interface Dashboard
-The new web interface provides:
-- System status monitoring
-- Real-time log viewing and filtering
-- Configuration management through a user-friendly UI
-- Audio device testing functionality
-- Quick actions for system control
-
-### Configuration Enhancements
-- User-specific configuration via `user_config.json`
-- Runtime validation of critical settings
-- More customization options for all components
-- Audio device selection and management
-
-### Performance Optimizations
-- Lazy loading of models
-- Queue size limits to prevent memory issues
-- Configurable standby mode for reduced CPU usage
-- Surface caching for improved avatar rendering performance
-
-## Troubleshooting
-
-### Audio Issues
-- Run `python -m sounddevice` to list available audio devices and update the device indices in your configuration
-- Use the web interface to test different audio devices
-- If experiencing audio dropouts, try increasing `AUDIO_CHUNK_SIZE` or adjusting `AUDIO_OUTPUT_LATENCY`
-- Ensure the microphone is not being used by another application
-
-### Visual Display Issues
-- If running on Raspberry Pi OS Lite, ensure the correct display driver is set (e.g., `export SDL_VIDEODRIVER=kmsdrm`)
-- For fullscreen mode, set `AVATAR_FULLSCREEN = True` in your configuration
-- If performance is slow, try reducing `AVATAR_FPS` or using a simpler animation style
-
-### API Connection Issues
-- Verify your API keys are correct
-- Check your internet connection
-- The system will automatically attempt to reconnect after temporary failures
-
-### Log Files
-- Check the logs in the `logs/` directory for detailed error information
-- Use `tail -f logs/echocore.log` to watch the logs in real-time
-- The web interface provides a convenient way to view and filter logs
-
-### Model Issues
-- Run `python model_downloader.py` to check for missing models
-- Ensure model paths in `config.py` match your actual file structure
-
-## Using the Web Interface
-
-To enable the web interface, set the following in your `user_config.json`:
-
-```json
-{
-  "WEB_INTERFACE_ENABLED": true,
-  "WEB_INTERFACE_PORT": 8080,
-  "WEB_INTERFACE_HOST": "0.0.0.0"
-}
-```
-
-Then access the dashboard at `http://your_pi_ip:8080` (default username: admin, password: echocore).
-
+New Features and Improvements (Enhanced Version)
+Web Interface: Monitor status, view/filter logs, change settings, test audio via a browser.
+Conversation History: LLM maintains context across multiple interactions.
+Enhanced Avatar: Multiple animation styles (circle, wave, particle, hologram) with smoother transitions and reactions.
+Flexible TTS: Choose between OpenAI, ElevenLabs, or local Piper TTS engines. Streaming supported.
+Improved Configuration: Use user_config.json for easy overrides without editing core files. Settings validation on startup.
+Model Downloader: model_downloader.py script simplifies obtaining Vosk and Piper models.
+Improved Error Handling: More specific error catching, automatic reconnection attempts for cloud services, thread monitoring in main.py.
+Audio Cues: Optional sound feedback for wake word and timeouts.
+Code Quality: Added type hinting, improved comments/docstrings, refactored logic for clarity and robustness across modules.
+Installation Script: More comprehensive install.sh for easier setup on compatible systems.
+Logging: Uses rotating file handler; configurable log level.
+Troubleshooting
+Audio Issues:
+Run python -m sounddevice in the activated venv to list devices. Update indices in user_config.json (null for default).
+Use the "Test Audio" buttons in the web interface settings.
+Check ALSA/PulseAudio configuration (alsamixer). Ensure the correct devices are unmuted and have appropriate volume levels.
+If using PipeWire, ensure pipewire-pulse and pipewire-alsa are correctly configured.
+Check logs for PortAudioError messages.
+Wake Word Not Detected:
+Verify PICOVOICE_ACCESS_KEY is correct in .env.
+Ensure .ppn file path(s) in config/user_config.json (PORCUPINE_KEYWORD_PATHS) are correct and files exist in models/porcupine/.
+Check microphone levels and ensure it's the selected input device.
+Adjust PORCUPINE_SENSITIVITIES (0.0 to 1.0). Higher values are more sensitive.
+Vosk Errors:
+Ensure the VOSK_MODEL_PATH points to the correct, fully extracted Vosk model directory.
+Check logs for Vosk initialization errors.
+Piper Errors:
+Verify the piper executable is installed correctly and is in the system's PATH (which piper).
+Ensure PIPER_MODEL_PATH points to the correct .onnx file and the corresponding .onnx.json file exists in the same directory.
+API Connection Issues (OpenAI/ElevenLabs):
+Double-check API keys in .env.
+Verify internet connectivity on the device.
+Check the respective service status pages for outages.
+Check logs for specific API errors (rate limits, authentication, etc.).
+Web Interface Issues:
+Ensure WEB_INTERFACE_ENABLED is true in config/user config.
+Check if the configured port (WEB_INTERFACE_PORT) is already in use (sudo netstat -tulnp | grep <port>).
+Verify the host address (WEB_INTERFACE_HOST). Use 0.0.0.0 to access from other devices on the network.
+Check browser console and EchoCore logs for Flask errors.
+Pygame/Avatar Issues:
+If running headless (no desktop environment), ensure Pygame can access the display (may require setting DISPLAY=:0 environment variable for the service or running specific commands like startx). Framebuffer drivers (SDL_VIDEODRIVER=kmsdrm) might be needed.
+Check logs for Pygame initialization errors.
+Permission Errors: Ensure the user running the application (e.g., pi or the user specified in echocore.service) has read/write permissions for the project directory, logs, cache, and read permissions for models. The install.sh script attempts to set these.
+Using the Web Interface
+Enable: Set WEB_INTERFACE_ENABLED = true in config.py or user_config.json.
+Configure: Adjust WEB_INTERFACE_PORT, WEB_INTERFACE_HOST, WEB_INTERFACE_USERNAME, WEB_INTERFACE_PASSWORD as needed. Change the default password!
+Restart: Restart the EchoCore application (or service).
+Access: Open a web browser and navigate to http://<your_device_ip>:<port> (e.g., http://192.168.1.100:8080).
+Login: Use the configured username and password.
 The web interface provides:
-- Dashboard with system status and recent activity
-- Settings page for configuration management
-- Logs viewer with filtering and download options
-- Audio device testing functionality
 
-## Future Enhancements
+Dashboard: System status, resource usage, recent activity/transitions, quick actions.
+Settings: View and modify configuration parameters (saved to user_config.json).
+Logs: View recent log entries with filtering and download options.
+License
+This project is licensed under the MIT License (assuming a https://www.google.com/search?q=LICENSE file exists, otherwise state the license).
 
-Planned future improvements:
-- Expanded web-based configuration interface
-- More sophisticated avatar visualizations
-- Integration with local smart home systems
-- Sentiment analysis for more appropriate responses
-- Custom wake word training interface
-
-## License
-
-This project is licensed under the [MIT License](https://github.com/redbeardenduro/Project_EchoCore/blob/main/LICENSE).
-
-## Acknowledgments
-
-- Vosk for the offline speech recognition engine
-- Picovoice for the wake word detection
-- OpenAI for the language and TTS models
-- ElevenLabs for voice synthesis technology
-- Piper for the open-source TTS system
+Acknowledgments
+Vosk & Kaldi Project (Offline STT)
+Picovoice (Porcupine Wake Word)
+OpenAI (GPT Models, TTS)
+ElevenLabs (TTS)
+Piper TTS Project & Contributors (Local TTS)
+sounddevice library developers
+pygame library developers
+Flask framework developers
+<!-- end list -->
