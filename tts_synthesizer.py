@@ -42,60 +42,80 @@ class TTSSynthesizer(threading.Thread):
         self.online_mode = True # Assume online unless API keys missing or errors occur
         self.reconnect_attempt_time = 0
         self.reconnect_cooldown = 60  # seconds between reconnection attempts
+        self.last_error = None  # Track the last error for reporting
 
-        # --- Initialize Clients based on Config ---
-        self._initialize_tts_engine()
+        # Initialize the selected TTS engine
+        self._init_client()
 
-    def _initialize_tts_engine(self):
+    def _init_openai_client(self):
+        """Initialize the OpenAI client for TTS."""
+        if config.OPENAI_API_KEY:
+            try:
+                self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=config.LLM_TIMEOUT)
+                logger.info("OpenAI TTS client initialized.")
+                return True
+            except AuthenticationError:
+                self.last_error = "OpenAI Authentication Failed for TTS. Check API Key."
+                logger.error(f"ERROR: {self.last_error}")
+                self.state_manager.set_state(State.ERROR)
+                return False
+            except Exception as e:
+                self.last_error = f"Error initializing OpenAI TTS client: {e}"
+                logger.error(f"ERROR: {self.last_error}")
+                self.state_manager.set_state(State.ERROR)
+                return False
+        else:
+            self.last_error = "OPENAI_API_KEY not found for OpenAI TTS."
+            logger.warning(f"Warning: {self.last_error}")
+            return False
+
+    def _init_elevenlabs_client(self):
+        """Initialize the ElevenLabs client for TTS."""
+        if config.ELEVENLABS_API_KEY:
+            try:
+                self.elevenlabs_client = ElevenLabs(api_key=config.ELEVENLABS_API_KEY)
+                # Test connection by listing voices
+                _ = self.elevenlabs_client.voices.get_all()
+                logger.info("ElevenLabs TTS client initialized.")
+                return True
+            except Exception as e:
+                self.last_error = f"Error initializing ElevenLabs client: {e}"
+                logger.error(f"ERROR: {self.last_error}")
+                self.state_manager.set_state(State.ERROR)
+                return False
+        else:
+            self.last_error = "ELEVENLABS_API_KEY not found for ElevenLabs TTS."
+            logger.warning(f"Warning: {self.last_error}")
+            return False
+
+    def _init_client(self):
         """Initialize the selected TTS engine."""
         if config.TTS_ENGINE == 'openai':
-            if config.OPENAI_API_KEY:
-                try:
-                    self.openai_client = OpenAI(api_key=config.OPENAI_API_KEY, timeout=config.LLM_TIMEOUT)
-                    logger.info("OpenAI TTS client initialized.")
-                except AuthenticationError:
-                     logger.error("ERROR: OpenAI Authentication Failed for TTS. Check API Key.")
-                     self.state_manager.set_state(State.ERROR)
-                     self.online_mode = False
-                except Exception as e:
-                    logger.error(f"Error initializing OpenAI TTS client: {e}")
-                    self.state_manager.set_state(State.ERROR)
-                    self.online_mode = False
-            else:
-                logger.warning("Warning: OPENAI_API_KEY not found for OpenAI TTS.")
-                self.online_mode = False
-
+            self.online_mode = self._init_openai_client()
         elif config.TTS_ENGINE == 'elevenlabs':
-            if config.ELEVENLABS_API_KEY:
-                try:
-                    self.elevenlabs_client = ElevenLabs(api_key=config.ELEVENLABS_API_KEY)
-                    # Test connection by listing voices
-                    _ = self.elevenlabs_client.voices.get_all()
-                    logger.info("ElevenLabs TTS client initialized.")
-                except Exception as e:
-                    logger.error(f"Error initializing ElevenLabs client: {e}")
-                    self.state_manager.set_state(State.ERROR)
-                    self.online_mode = False
-            else:
-                logger.warning("Warning: ELEVENLABS_API_KEY not found for ElevenLabs TTS.")
-                self.online_mode = False
-
+            self.online_mode = self._init_elevenlabs_client()
         elif config.TTS_ENGINE == 'piper':
             logger.info("Piper TTS selected (local engine).")
             # Check if model file exists
             if not os.path.exists(config.PIPER_MODEL_PATH):
-                 logger.error(f"ERROR: Piper model not found at {config.PIPER_MODEL_PATH}")
-                 self.state_manager.set_state(State.ERROR)
-            self.online_mode = False # Piper is always offline
-
+                self.last_error = f"Piper model not found at {config.PIPER_MODEL_PATH}"
+                logger.error(f"ERROR: {self.last_error}")
+                self.state_manager.set_state(State.ERROR)
+                self.online_mode = False
+            else:
+                # Piper is always offline but functional if model exists
+                self.online_mode = False
         else:
-            logger.error(f"ERROR: Unknown TTS_ENGINE configured: {config.TTS_ENGINE}")
+            self.last_error = f"Unknown TTS_ENGINE configured: {config.TTS_ENGINE}"
+            logger.error(f"ERROR: {self.last_error}")
             self.state_manager.set_state(State.ERROR)
+            self.online_mode = False
 
         if not self.online_mode and config.TTS_ENGINE != 'piper':
-             logger.error("ERROR: Selected cloud TTS engine but cannot initialize. Cannot synthesize speech.")
-             if not self.state_manager.is_state(State.ERROR): # Avoid overwriting other errors
-                 self.state_manager.set_state(State.ERROR)
+            self.last_error = "Selected cloud TTS engine but cannot initialize. Cannot synthesize speech."
+            logger.error(f"ERROR: {self.last_error}")
+            if not self.state_manager.is_state(State.ERROR):  # Avoid overwriting other errors
+                self.state_manager.set_state(State.ERROR)
 
     def _attempt_reconnect(self):
         """Try to reconnect to cloud services if offline."""
@@ -105,7 +125,7 @@ class TTSSynthesizer(threading.Thread):
             
         logger.info("Attempting to reconnect to TTS service...")
         self.reconnect_attempt_time = current_time
-        self._initialize_tts_engine()
+        self._init_client()
         return self.online_mode
 
     def run(self):
@@ -140,7 +160,8 @@ class TTSSynthesizer(threading.Thread):
                         audio_stream = self._synthesize_piper(text_to_speak)
                     else:
                         # Fallback if online failed or Piper selected but failed init
-                        logger.warning("TTS Synthesizer: Cannot synthesize - engine not available.")
+                        self.last_error = "TTS Synthesizer: Cannot synthesize - engine not available."
+                        logger.warning(self.last_error)
                         self.state_manager.set_state(State.ERROR)
 
                     # --- Stream Audio Chunks to Output Queue ---
@@ -164,7 +185,7 @@ class TTSSynthesizer(threading.Thread):
 
                     # --- Handle Synthesis Failure ---
                     if not synthesis_successful:
-                        logger.warning("TTS Synthesizer: Synthesis failed.")
+                        logger.warning(f"TTS Synthesizer: Synthesis failed. Error: {self.last_error}")
                         # Avoid getting stuck - transition back to IDLE or ERROR
                         if not self.state_manager.is_state(State.ERROR):
                             self.state_manager.set_state(State.IDLE)
@@ -176,7 +197,8 @@ class TTSSynthesizer(threading.Thread):
                         logger.debug("TTS Synthesizer: State changed while waiting for text.")
                     continue
                 except Exception as e:
-                    logger.exception(f"An unexpected error occurred in TTS Synthesizer thread: {e}")
+                    self.last_error = f"An unexpected error occurred in TTS Synthesizer: {e}"
+                    logger.exception(self.last_error)
                     self.state_manager.set_state(State.ERROR)
                     time.sleep(1)
             else:
@@ -207,17 +229,21 @@ class TTSSynthesizer(threading.Thread):
             # Return the raw stream content iterator
             return response.iter_bytes(chunk_size=config.AUDIO_CHUNK_SIZE * 2) # Read enough bytes for int16
         except APIConnectionError:
-            logger.error("OpenAI TTS Error: Connection failed.")
+            self.last_error = "OpenAI TTS Error: Connection failed."
+            logger.error(self.last_error)
             self.online_mode = False
         except APITimeoutError:
-            logger.error("OpenAI TTS Error: Request timed out.")
+            self.last_error = "OpenAI TTS Error: Request timed out."
+            logger.error(self.last_error)
             self.online_mode = False
         except AuthenticationError:
-            logger.error("OpenAI TTS Error: Authentication failed.")
+            self.last_error = "OpenAI TTS Error: Authentication failed."
+            logger.error(self.last_error)
             self.online_mode = False
             self.state_manager.set_state(State.ERROR)
         except Exception as e:
-            logger.exception(f"OpenAI TTS Error: {e}")
+            self.last_error = f"OpenAI TTS Error: {e}"
+            logger.exception(self.last_error)
             self.online_mode = False
         return None # Indicate failure
 
@@ -236,7 +262,8 @@ class TTSSynthesizer(threading.Thread):
             )
             return audio_stream # Returns an iterator
         except Exception as e:
-            logger.exception(f"ElevenLabs TTS Error: {e}")
+            self.last_error = f"ElevenLabs TTS Error: {e}"
+            logger.exception(self.last_error)
             self.online_mode = False
             # Check for specific API errors if needed
             if "Authentication" in str(e):
@@ -273,9 +300,11 @@ class TTSSynthesizer(threading.Thread):
             return process.stdout
 
         except FileNotFoundError:
-            logger.error("ERROR: 'piper' command not found. Is Piper TTS installed and in PATH?")
+            self.last_error = "ERROR: 'piper' command not found. Is Piper TTS installed and in PATH?"
+            logger.error(self.last_error)
             self.state_manager.set_state(State.ERROR)
         except Exception as e:
-            logger.exception(f"Piper TTS Error: {e}")
+            self.last_error = f"Piper TTS Error: {e}"
+            logger.exception(self.last_error)
             self.state_manager.set_state(State.ERROR)
         return None # Indicate failure
