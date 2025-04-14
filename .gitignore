@@ -1,37 +1,100 @@
-# API keys and sensitive data
-.env
-
-# Python
+# --- Python ---
+# Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
 *$py.class
-*.so
-.Python
-env/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-*.egg-info/
-.installed.cfg
-*.egg
 
-# Virtual environment
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg
+wheels/
+pip-wheel-metadata/
+*.manifest
+*.spec
+
+# PyInstaller
+# Usually these files are written by a python script from a template
+# before PyInstaller builds the exe, so as to inject date/other infos into it.
+*.manifest
+*.spec
+
+# Installer logs
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage reports
+htmlcov/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.pytest_cache/
+.tox/
+
+# --- Project EchoCore Specific ---
+# Virtual Environment (match name used in install.sh/setup)
 venv/
+.venv/
+env/
 ENV/
 
-# Logs
-logs/
-*.log
+# API Keys and Sensitive Configuration
+.env
+*.env
 
-# OS specific
+# User Configuration (users typically don't commit their specific settings)
+user_config.json
+
+# Logs Directory and Install Logs
+logs/
+echocore_install_*.log
+# Optionally ignore specific log files if not ignoring the whole directory
+# *.log
+
+# Cache Directory
+cache/
+
+# Downloaded Models (these are usually large and downloaded separately)
+# Ignore the entire models directory, assuming model_downloader places everything here.
+# If the directory structure itself should be tracked, ignore specific subdirs/files instead.
+models/
+# Alternatively, ignore only specific large file types within models:
+# models/**/*.onnx
+# models/**/*.onnx.json
+# models/**/*.zip
+# models/**/*.tar.gz
+# models/**/*.tgz
+# models/**/*.pbmm
+# models/**/*.pv
+# models/**/*.ppn
+
+# Temporary Download Files
+*.part
+
+# Generated Audio Files (e.g., from tests)
+*.wav
+*.mp3
+*.raw
+# Be more specific if needed:
+# piper_test_output.wav
+# test_output.wav
+
+# --- IDE / Editor Files ---
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+*.komodoproject
+*~
+*.swp
+*.swo
+
+# --- OS generated files ---
 .DS_Store
 .DS_Store?
 ._*
@@ -40,8 +103,5 @@ logs/
 ehthumbs.db
 Thumbs.db
 
-# Project specific
-cache/
-models/*/
-!models/.gitkeep
-!models/*/.gitkeep
+# --- Other ---
+# Add any other files or directories specific to your development workflow below
