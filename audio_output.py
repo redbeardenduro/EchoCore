@@ -8,8 +8,13 @@ import queue
 import time
 import sounddevice as sd
 import numpy as np
+import logging
 import config
 from state_manager import StateManager, State
+from audio_utils import find_optimal_device
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 class AudioOutputHandler(threading.Thread):
     """
@@ -23,22 +28,45 @@ class AudioOutputHandler(threading.Thread):
         self.state_manager = state_manager
         self.stop_event = stop_event
         self.output_stream = None
+        self.selected_device = None  # Will be set during initialization
+        
+        # Check audio devices and select optimal output device
+        self._check_and_select_audio_device()
+
+    def _check_and_select_audio_device(self):
+        """Check available audio devices and select the optimal output device."""
+        # Find optimal output device
+        self.selected_device = find_optimal_device(
+            mode='output',
+            preferred_index=config.AUDIO_OUTPUT_DEVICE_INDEX,
+            fallback_index=None  # Use system default as fallback
+        )
+        
+        # Log the selected device
+        if self.selected_device is None:
+            logger.info("Using system default audio output device")
+        else:
+            try:
+                device_info = sd.query_devices(self.selected_device)
+                logger.info(f"Selected audio output device: [{self.selected_device}] {device_info['name']}")
+            except Exception as e:
+                logger.error(f"Error getting info for selected device {self.selected_device}: {e}")
 
     def run(self):
         """Main loop for the audio output thread."""
-        print("Audio Output Handler waiting for audio...")
+        logger.info("Audio Output Handler waiting for audio...")
         try:
-            # Setup output stream [13, 14, 15, 16, 17, 19]
+            # Setup output stream using the selected device
             self.output_stream = sd.OutputStream(
                 samplerate=config.AUDIO_SAMPLE_RATE,
-                blocksize=config.AUDIO_CHUNK_SIZE, # Can be adjusted
-                device=config.AUDIO_OUTPUT_DEVICE_INDEX,
+                blocksize=config.AUDIO_CHUNK_SIZE,
+                device=self.selected_device,
                 channels=config.AUDIO_OUTPUT_CHANNELS,
                 dtype=config.AUDIO_DTYPE,
                 latency=config.AUDIO_OUTPUT_LATENCY
             )
             self.output_stream.start()
-            print(f"Audio output stream started on device {self.output_stream.device}...")
+            logger.info(f"Audio output stream started on device {self.output_stream.device}...")
 
             while not self.stop_event.is_set():
                 if self.state_manager.is_state(State.SPEAKING):
@@ -47,7 +75,7 @@ class AudioOutputHandler(threading.Thread):
 
                         if audio_chunk is None:
                             # End of speech signal received
-                            print("Audio Output: End of speech detected.")
+                            logger.info("Audio Output: End of speech detected.")
                             self.state_manager.set_state(State.IDLE) # Transition back to IDLE
                             self.avatar_queue.put(0.0) # Send zero amplitude
                             continue
@@ -60,7 +88,7 @@ class AudioOutputHandler(threading.Thread):
                             if numpy_chunk.size > 0:
                                 self.output_stream.write(numpy_chunk)
 
-                                # Calculate amplitude for avatar [14, 34, 18]
+                                # Calculate amplitude for avatar
                                 amplitude = np.sqrt(np.mean(numpy_chunk.astype(np.float32)**2))
                                 
                                 # Normalize amplitude using config parameter instead of hardcoded value
@@ -70,24 +98,24 @@ class AudioOutputHandler(threading.Thread):
                                 self.avatar_queue.put(0.0) # Send zero if chunk empty
 
                         except ValueError as ve:
-                             print(f"Audio Output: Error processing chunk - {ve}. Chunk size: {len(audio_chunk)}")
+                             logger.error(f"Audio Output: Error processing chunk - {ve}. Chunk size: {len(audio_chunk)}")
                              self.avatar_queue.put(0.0) # Send zero amplitude on error
                         except sd.PortAudioError as pae:
-                             print(f"Audio Output: PortAudioError during write - {pae}")
+                             logger.error(f"Audio Output: PortAudioError during write - {pae}")
                              # Attempt to recover or set error state
-                             self.state_manager.set_state(State.ERROR)
+                             self.state_manager.set_state(State.ERROR, error_message=f"Audio output error: {pae}")
                              time.sleep(1) # Avoid busy loop on error
 
                     except queue.Empty:
                         # If SPEAKING but queue is empty, maybe TTS finished unexpectedly?
-                        print("Audio Output: Queue empty while in SPEAKING state.")
+                        logger.debug("Audio Output: Queue empty while in SPEAKING state.")
                         # Timeout logic: if empty for too long, assume TTS ended/failed
                         # For now, just continue waiting, rely on None marker or state change
                         self.avatar_queue.put(0.0) # Send zero amplitude
                         pass
                     except Exception as e:
-                        print(f"An unexpected error occurred in Audio Output Handler: {e}")
-                        self.state_manager.set_state(State.ERROR)
+                        logger.exception(f"An unexpected error occurred in Audio Output Handler: {e}")
+                        self.state_manager.set_state(State.ERROR, error_message=f"Audio output error: {e}")
                         self.avatar_queue.put(0.0) # Send zero amplitude
                         time.sleep(1)
                 else:
@@ -96,23 +124,24 @@ class AudioOutputHandler(threading.Thread):
                     time.sleep(0.1)
 
         except sd.PortAudioError as e:
-            print(f"Sounddevice/PortAudio Error in Audio Output: {e}")
-            self.state_manager.set_state(State.ERROR)
+            error_msg = f"Sounddevice/PortAudio Error in Audio Output: {e}"
+            logger.error(error_msg)
+            self.state_manager.set_state(State.ERROR, error_message=error_msg)
         except Exception as e:
-            print(f"An unexpected error occurred initializing Audio Output: {e}")
-            self.state_manager.set_state(State.ERROR)
+            error_msg = f"An unexpected error occurred initializing Audio Output: {e}"
+            logger.exception(error_msg)
+            self.state_manager.set_state(State.ERROR, error_message=error_msg)
         finally:
             self._cleanup()
 
     def _cleanup(self):
         """Clean up audio output resources."""
-        print("Cleaning up Audio Output Handler...")
+        logger.info("Cleaning up Audio Output Handler...")
         if self.output_stream is not None:
             try:
                 if not self.output_stream.closed:
                     self.output_stream.stop()
                     self.output_stream.close()
-                print("Audio output stream stopped and closed.")
+                logger.info("Audio output stream stopped and closed.")
             except Exception as e:
-                print(f"Error closing output stream: {e}")
-        # sd._terminate() # Generally not needed
+                logger.error(f"Error closing output stream: {e}")
