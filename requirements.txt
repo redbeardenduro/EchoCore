@@ -1,0 +1,27 @@
+# requirements.txt
+
+# Core
+python-dotenv
+numpy
+
+# Audio I/O
+sounddevice
+
+# Wake Word
+pvporcupine
+
+# STT
+vosk
+
+# LLM
+openai
+
+# TTS (Choose based on config.TTS_ENGINE)
+elevenlabs # If using ElevenLabs
+# piper-tts # If using Piper (installation might need specific steps/build)
+
+# Avatar
+pygame
+
+# Optional: Sentiment Analysis
+# vaderSentiment
