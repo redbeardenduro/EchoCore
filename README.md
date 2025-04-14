@@ -309,7 +309,7 @@ Planned future improvements:
 
 ## License
 
-[Insert your license information here]
+This project is licensed under the [MIT License](https://github.com/redbeardenduro/Project_EchoCore/blob/main/LICENSE).
 
 ## Acknowledgments
 
