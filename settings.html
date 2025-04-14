@@ -1,0 +1,160 @@
+<div class="settings-section">
+                    <div class="collapsible" onclick="toggleSection(this)">
+                        <i class="fas fa-desktop"></i> Avatar Settings
+                    </div>
+                    <div class="collapsible-content">
+                        <div class="form-group">
+                            <label for="AVATAR_ANIMATION_STYLE">Animation Style</label>
+                            <select id="AVATAR_ANIMATION_STYLE" name="AVATAR_ANIMATION_STYLE">
+                                <option value="circle" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'circle' %}selected{% endif %}>Circle</option>
+                                <option value="wave" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'wave' %}selected{% endif %}>Wave</option>
+                                <option value="particle" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'particle' %}selected{% endif %}>Particle</option>
+                                <option value="hologram" {% if user_config.get('AVATAR_ANIMATION_STYLE', config.AVATAR_ANIMATION_STYLE) == 'hologram' %}selected{% endif %}>Hologram</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="AVATAR_WINDOW_WIDTH">Window Width</label>
+                            <input type="number" id="AVATAR_WINDOW_WIDTH" name="AVATAR_WINDOW_WIDTH" 
+                                   value="{{ user_config.get('AVATAR_WINDOW_WIDTH', config.AVATAR_WINDOW_WIDTH) }}" 
+                                   step="1" min="320" max="1920">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="AVATAR_WINDOW_HEIGHT">Window Height</label>
+                            <input type="number" id="AVATAR_WINDOW_HEIGHT" name="AVATAR_WINDOW_HEIGHT" 
+                                   value="{{ user_config.get('AVATAR_WINDOW_HEIGHT', config.AVATAR_WINDOW_HEIGHT) }}" 
+                                   step="1" min="240" max="1080">
+                        </div>
+                        
+                        <div class="form-check">
+                            <input type="checkbox" id="AVATAR_DISPLAY_STATUS_TEXT" name="AVATAR_DISPLAY_STATUS_TEXT" value="true"
+                                   {% if user_config.get('AVATAR_DISPLAY_STATUS_TEXT', config.AVATAR_DISPLAY_STATUS_TEXT) %}checked{% endif %}>
+                            <label for="AVATAR_DISPLAY_STATUS_TEXT">Display Status Text</label>
+                        </div>
+                        
+                        <div class="form-check">
+                            <input type="checkbox" id="AVATAR_DEBUG_OVERLAY" name="AVATAR_DEBUG_OVERLAY" value="true"
+                                   {% if user_config.get('AVATAR_DEBUG_OVERLAY', config.AVATAR_DEBUG_OVERLAY) %}checked{% endif %}>
+                            <label for="AVATAR_DEBUG_OVERLAY">Enable Debug Overlay</label>
+                        </div>
+                        
+                        <div class="form-check">
+                            <input type="checkbox" id="AVATAR_FULLSCREEN" name="AVATAR_FULLSCREEN" value="true"
+                                   {% if user_config.get('AVATAR_FULLSCREEN', config.AVATAR_FULLSCREEN) %}checked{% endif %}>
+                            <label for="AVATAR_FULLSCREEN">Fullscreen Mode</label>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="settings-section">
+                    <div class="collapsible" onclick="toggleSection(this)">
+                        <i class="fas fa-globe"></i> Web Interface Settings
+                    </div>
+                    <div class="collapsible-content">
+                        <div class="form-check">
+                            <input type="checkbox" id="WEB_INTERFACE_ENABLED" name="WEB_INTERFACE_ENABLED" value="true"
+                                   {% if user_config.get('WEB_INTERFACE_ENABLED', config.WEB_INTERFACE_ENABLED) %}checked{% endif %}>
+                            <label for="WEB_INTERFACE_ENABLED">Enable Web Interface</label>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="WEB_INTERFACE_PORT">Port</label>
+                            <input type="number" id="WEB_INTERFACE_PORT" name="WEB_INTERFACE_PORT" 
+                                   value="{{ user_config.get('WEB_INTERFACE_PORT', config.WEB_INTERFACE_PORT) }}" 
+                                   step="1" min="1024" max="65535">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="WEB_INTERFACE_HOST">Host</label>
+                            <input type="text" id="WEB_INTERFACE_HOST" name="WEB_INTERFACE_HOST" 
+                                   value="{{ user_config.get('WEB_INTERFACE_HOST', config.WEB_INTERFACE_HOST) }}">
+                            <small>Use 0.0.0.0 to allow connections from any IP address</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="WEB_INTERFACE_USERNAME">Username</label>
+                            <input type="text" id="WEB_INTERFACE_USERNAME" name="WEB_INTERFACE_USERNAME" 
+                                   value="{{ user_config.get('WEB_INTERFACE_USERNAME', config.WEB_INTERFACE_USERNAME) }}">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="WEB_INTERFACE_PASSWORD">Password</label>
+                            <input type="password" id="WEB_INTERFACE_PASSWORD" name="WEB_INTERFACE_PASSWORD" 
+                                   value="{{ user_config.get('WEB_INTERFACE_PASSWORD', config.WEB_INTERFACE_PASSWORD) }}">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <button type="submit" class="btn btn-secondary"><i class="fas fa-save"></i> Save Settings</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        // Function to toggle collapsible sections
+        function toggleSection(element) {
+            element.classList.toggle("active");
+            var content = element.nextElementSibling;
+            if (content.style.display === "block") {
+                content.style.display = "none";
+            } else {
+                content.style.display = "block";
+            }
+        }
+        
+        // Function to update TTS options visibility based on selected engine
+        function updateTtsOptions() {
+            var selectedEngine = document.getElementById('TTS_ENGINE').value;
+            var options = document.getElementsByClassName('engine-options');
+            
+            for (var i = 0; i < options.length; i++) {
+                options[i].style.display = 'none';
+            }
+            
+            if (selectedEngine === 'openai') {
+                document.getElementById('openai-tts-options').style.display = 'block';
+            } else if (selectedEngine === 'elevenlabs') {
+                document.getElementById('elevenlabs-tts-options').style.display = 'block';
+            } else if (selectedEngine === 'piper') {
+                document.getElementById('piper-tts-options').style.display = 'block';
+            }
+        }
+        
+        // Function to test audio devices
+        function testAudioDevice(deviceType, deviceIndex) {
+            // Convert "null" string to null value
+            if (deviceIndex === "null") deviceIndex = null;
+            
+            fetch('/audio-test', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                },
+                body: 'device_type=' + deviceType + '&device_index=' + deviceIndex
+            })
+            .then(response => response.json())
+            .then(data => {
+                alert(data.message);
+            })
+            .catch(error => {
+                console.error('Error testing audio device:', error);
+                alert('Error testing audio device. Check console for details.');
+            });
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            updateTtsOptions();
+            
+            // Open first section by default
+            var firstSection = document.querySelector('.collapsible');
+            if (firstSection) {
+                toggleSection(firstSection);
+            }
+        });
+    </script>
+</body>
+</html>
