@@ -13,6 +13,7 @@ import logging
 import math
 import config
 from state_manager import StateManager, State
+from audio_utils import list_audio_devices, find_optimal_device
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -33,6 +34,7 @@ class AudioInputHandler(threading.Thread):
         self.listening_timeout = 10.0  # Timeout in seconds
         self.listening_start_time = 0.0
         self.is_timeout_check_enabled = True
+        self.selected_device = None  # Will be set during initialization
 
         # Audio cue variables
         self.feedback_queue = queue.Queue()
@@ -44,6 +46,9 @@ class AudioInputHandler(threading.Thread):
              raise ValueError("PORCUPINE_KEYWORD_PATHS must be configured.")
         if config.PICOVOICE_ACCESS_KEY is None:
             raise ValueError("PICOVOICE_ACCESS_KEY must be configured.")
+
+        # Check audio devices and select optimal input device
+        self._check_and_select_audio_device()
 
         try:
             # Initialize Porcupine
@@ -66,8 +71,30 @@ class AudioInputHandler(threading.Thread):
 
         except pvporcupine.PorcupineError as e:
             logger.error(f"Error initializing Porcupine: {e}")
-            self.state_manager.set_state(State.ERROR)
+            self.state_manager.set_state(State.ERROR, error_message=f"Porcupine initialization failed: {e}")
             raise
+
+    def _check_and_select_audio_device(self):
+        """Check available audio devices and select the optimal input device."""
+        # First, list available audio devices for logging purposes
+        list_audio_devices()
+        
+        # Find optimal input device
+        self.selected_device = find_optimal_device(
+            mode='input',
+            preferred_index=config.AUDIO_INPUT_DEVICE_INDEX,
+            fallback_index=None  # Use system default as fallback
+        )
+        
+        # Log the selected device
+        if self.selected_device is None:
+            logger.info("Using system default audio input device")
+        else:
+            try:
+                device_info = sd.query_devices(self.selected_device)
+                logger.info(f"Selected audio input device: [{self.selected_device}] {device_info['name']}")
+            except Exception as e:
+                logger.error(f"Error getting info for selected device {self.selected_device}: {e}")
 
     def _generate_audio_cues(self):
         """Generate audio cues for wake word detection and timeout."""
@@ -166,7 +193,7 @@ class AudioInputHandler(threading.Thread):
             self.audio_stream = sd.InputStream(
                 samplerate=config.AUDIO_SAMPLE_RATE,
                 blocksize=self.porcupine.frame_length, # Use Porcupine's frame length
-                device=config.AUDIO_INPUT_DEVICE_INDEX,
+                device=self.selected_device,
                 channels=config.AUDIO_INPUT_CHANNELS,
                 dtype=config.AUDIO_DTYPE,
                 callback=self._audio_callback,
@@ -184,11 +211,13 @@ class AudioInputHandler(threading.Thread):
                 time.sleep(0.1)
 
         except sd.PortAudioError as e:
-            logger.error(f"Sounddevice/PortAudio Error in Audio Input: {e}")
-            self.state_manager.set_state(State.ERROR)
+            error_msg = f"Sounddevice/PortAudio Error in Audio Input: {e}"
+            logger.error(error_msg)
+            self.state_manager.set_state(State.ERROR, error_message=error_msg)
         except Exception as e:
-            logger.exception(f"An unexpected error occurred in Audio Input thread: {e}")
-            self.state_manager.set_state(State.ERROR)
+            error_msg = f"An unexpected error occurred in Audio Input thread: {e}"
+            logger.exception(error_msg)
+            self.state_manager.set_state(State.ERROR, error_message=error_msg)
         finally:
             self._cleanup()
 
