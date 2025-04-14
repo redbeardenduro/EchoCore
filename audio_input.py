@@ -6,11 +6,16 @@ import threading
 import queue
 import time
 import struct
+import numpy as np
 import sounddevice as sd
 import pvporcupine
-import numpy as np
+import logging
+import math
 import config
 from state_manager import StateManager, State
+
+# Setup logger
+logger = logging.getLogger(__name__)
 
 class AudioInputHandler(threading.Thread):
     """
@@ -25,6 +30,14 @@ class AudioInputHandler(threading.Thread):
         self.porcupine = None
         self.audio_stream = None
         self._pa = None # PyAudio instance if needed by Porcupine's chosen backend
+        self.listening_timeout = 10.0  # Timeout in seconds
+        self.listening_start_time = 0.0
+        self.is_timeout_check_enabled = True
+
+        # Audio cue variables
+        self.feedback_queue = queue.Queue()
+        self.should_play_cue = False
+        self.current_cue = None
 
         # Validate Porcupine paths
         if config.PORCUPINE_KEYWORD_PATHS is None or not config.PORCUPINE_KEYWORD_PATHS:
@@ -33,41 +46,123 @@ class AudioInputHandler(threading.Thread):
             raise ValueError("PICOVOICE_ACCESS_KEY must be configured.")
 
         try:
-            # Initialize Porcupine [8, 9, 10, 11, 12]
+            # Initialize Porcupine
             self.porcupine = pvporcupine.create(
                 access_key=config.PICOVOICE_ACCESS_KEY,
                 keyword_paths=config.PORCUPINE_KEYWORD_PATHS,
                 model_path=config.PORCUPINE_MODEL_PATH,
                 sensitivities=config.PORCUPINE_SENSITIVITIES
             )
-            print(f"Porcupine initialized. Listening for: {self.porcupine.keyword_paths}")
-            print(f"Expected sample rate: {self.porcupine.sample_rate}, Frame length: {self.porcupine.frame_length}")
+            logger.info(f"Porcupine initialized. Listening for: {self.porcupine.keyword_paths}")
+            logger.info(f"Expected sample rate: {self.porcupine.sample_rate}, Frame length: {self.porcupine.frame_length}")
 
             # Ensure config sample rate matches Porcupine
-            if config.AUDIO_SAMPLE_RATE!= self.porcupine.sample_rate:
-                print(f"Warning: Configured sample rate ({config.AUDIO_SAMPLE_RATE}) does not match Porcupine ({self.porcupine.sample_rate}). Using Porcupine's rate.")
+            if config.AUDIO_SAMPLE_RATE != self.porcupine.sample_rate:
+                logger.warning(f"Warning: Configured sample rate ({config.AUDIO_SAMPLE_RATE}) does not match Porcupine ({self.porcupine.sample_rate}). Using Porcupine's rate.")
                 config.AUDIO_SAMPLE_RATE = self.porcupine.sample_rate
 
+            # Generate audio cues
+            self._generate_audio_cues()
+
         except pvporcupine.PorcupineError as e:
-            print(f"Error initializing Porcupine: {e}")
+            logger.error(f"Error initializing Porcupine: {e}")
             self.state_manager.set_state(State.ERROR)
             raise
 
+    def _generate_audio_cues(self):
+        """Generate audio cues for wake word detection and timeout."""
+        # Wake word detected cue (ascending tones)
+        self.wake_cue = self._generate_tone_sequence(
+            frequencies=[440, 880, 1320],  # A4, A5, E6
+            durations=[0.1, 0.1, 0.2],
+            volume=0.3
+        )
+        
+        # Timeout cue (descending tones)
+        self.timeout_cue = self._generate_tone_sequence(
+            frequencies=[880, 660, 440],  # A5, E5, A4
+            durations=[0.1, 0.1, 0.2],
+            volume=0.3
+        )
+        
+        # Error cue (two quick low tones)
+        self.error_cue = self._generate_tone_sequence(
+            frequencies=[220, 220],  # A3, A3
+            durations=[0.1, 0.1],
+            volume=0.3
+        )
+        
+        logger.info("Audio cues generated.")
+
+    def _generate_tone_sequence(self, frequencies, durations, volume=0.3):
+        """Generate a sequence of tones as an audio cue."""
+        sample_rate = config.AUDIO_SAMPLE_RATE
+        samples = []
+        
+        for freq, duration in zip(frequencies, durations):
+            # Generate sine wave
+            t = np.linspace(0, duration, int(sample_rate * duration), False)
+            tone = np.sin(2 * np.pi * freq * t) * volume
+            
+            # Apply simple envelope to avoid clicks
+            fade_len = int(sample_rate * 0.01)  # 10ms fade
+            fade_in = np.linspace(0, 1, fade_len)
+            fade_out = np.linspace(1, 0, fade_len)
+            
+            if len(tone) > 2 * fade_len:
+                tone[:fade_len] *= fade_in
+                tone[-fade_len:] *= fade_out
+                
+            # Convert to int16
+            tone = (tone * 32767).astype(np.int16)
+            samples.append(tone)
+            
+        # Combine all tones
+        return np.concatenate(samples)
+
     def _wake_word_callback(self, keyword_index):
         """Callback function when a wake word is detected."""
-        print(f"Wake word detected (Index: {keyword_index})!")
+        logger.info(f"Wake word detected (Index: {keyword_index})!")
         if self.state_manager.is_state(State.IDLE):
+            # Play wake sound cue - enqueue it for playback
+            self.should_play_cue = True
+            self.current_cue = self.wake_cue
+            
+            # Set state to LISTENING
             self.state_manager.set_state(State.LISTENING)
-            # Potentially add a sound cue here
+            
+            # Start listening timeout
+            self.listening_start_time = time.time()
+            self.is_timeout_check_enabled = True
+        else:
+            logger.debug(f"Wake word detected but ignored - current state: {self.state_manager.get_state()}")
+
+    def _check_listening_timeout(self):
+        """Check if listening has timed out and reset to IDLE if needed."""
+        if (self.is_timeout_check_enabled and 
+            self.state_manager.is_state(State.LISTENING) and 
+            time.time() - self.listening_start_time > self.listening_timeout):
+            
+            logger.info(f"Listening timeout after {self.listening_timeout} seconds. Returning to IDLE state.")
+            
+            # Play timeout sound cue
+            self.should_play_cue = True
+            self.current_cue = self.timeout_cue
+            
+            # Reset state
+            self.state_manager.set_state(State.IDLE)
+            
+            # Pause timeout checks until next wake word
+            self.is_timeout_check_enabled = False
 
     def run(self):
         """Main loop for the audio input thread."""
         if self.state_manager.is_state(State.ERROR):
-            print("AudioInputHandler cannot start due to initialization error.")
+            logger.error("AudioInputHandler cannot start due to initialization error.")
             return
 
         try:
-            # Use sounddevice InputStream [13, 14, 15, 16, 17, 18, 19]
+            # Use sounddevice InputStream
             self.audio_stream = sd.InputStream(
                 samplerate=config.AUDIO_SAMPLE_RATE,
                 blocksize=self.porcupine.frame_length, # Use Porcupine's frame length
@@ -75,20 +170,24 @@ class AudioInputHandler(threading.Thread):
                 channels=config.AUDIO_INPUT_CHANNELS,
                 dtype=config.AUDIO_DTYPE,
                 callback=self._audio_callback,
-                latency='low' # Attempt low latency [15, 17]
+                latency='low' # Attempt low latency
             )
             self.audio_stream.start()
-            print(f"Audio stream started on device {self.audio_stream.device}...")
+            logger.info(f"Audio stream started on device {self.audio_stream.device}...")
 
             # Keep the thread alive while the stop event is not set
             while not self.stop_event.is_set():
+                # Check for listening timeout
+                self._check_listening_timeout()
+                
+                # Sleep briefly to avoid busy loop
                 time.sleep(0.1)
 
         except sd.PortAudioError as e:
-            print(f"Sounddevice/PortAudio Error in Audio Input: {e}")
+            logger.error(f"Sounddevice/PortAudio Error in Audio Input: {e}")
             self.state_manager.set_state(State.ERROR)
         except Exception as e:
-            print(f"An unexpected error occurred in Audio Input thread: {e}")
+            logger.exception(f"An unexpected error occurred in Audio Input thread: {e}")
             self.state_manager.set_state(State.ERROR)
         finally:
             self._cleanup()
@@ -98,7 +197,7 @@ class AudioInputHandler(threading.Thread):
         This callback is invoked by sounddevice when a new block of audio data is available.
         """
         if status:
-            print(f"Audio input status: {status}")
+            logger.warning(f"Audio input status: {status}")
 
         if self.porcupine:
             try:
@@ -116,23 +215,37 @@ class AudioInputHandler(threading.Thread):
                 if self.state_manager.is_state(State.LISTENING):
                     # Put raw bytes onto the queue for Vosk
                     self.audio_queue.put(indata.tobytes())
+                
+                # If we need to play an audio cue
+                if self.should_play_cue and self.current_cue is not None:
+                    # We'd normally send this to the audio output handler,
+                    # but for simplicity, we'll directly create a sound here
+                    # In a real implementation, this would go through the proper channels
+                    try:
+                        sd.play(self.current_cue, config.AUDIO_SAMPLE_RATE, blocking=False)
+                        logger.debug("Playing audio cue")
+                    except Exception as e:
+                        logger.error(f"Error playing audio cue: {e}")
+                    
+                    # Reset cue state after attempting to play
+                    self.should_play_cue = False
+                    self.current_cue = None
 
             except Exception as e:
-                print(f"Error during audio callback processing: {e}")
+                logger.exception(f"Error during audio callback processing: {e}")
                 # Consider setting ERROR state here if persistent
 
     def _cleanup(self):
         """Clean up resources."""
-        print("Cleaning up Audio Input Handler...")
+        logger.info("Cleaning up Audio Input Handler...")
         if self.audio_stream is not None:
             try:
                 if not self.audio_stream.closed:
                     self.audio_stream.stop()
                     self.audio_stream.close()
-                print("Audio stream stopped and closed.")
+                logger.info("Audio stream stopped and closed.")
             except Exception as e:
-                print(f"Error closing audio stream: {e}")
+                logger.error(f"Error closing audio stream: {e}")
         if self.porcupine is not None:
             self.porcupine.delete()
-            print("Porcupine instance deleted.")
-        # sd._terminate() # Generally not needed unless debugging PortAudio issues
+            logger.info("Porcupine instance deleted.")
