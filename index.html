@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EchoCore Dashboard</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <meta http-equiv="refresh" content="30">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1><i class="fas fa-microchip"></i> Project EchoCore Dashboard</h1>
+        </div>
+    </header>
+    <nav>
+        <div class="container">
+            <a href="{{ url_for('index') }}"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
+            <a href="{{ url_for('settings') }}"><i class="fas fa-cogs"></i> Settings</a>
+            <a href="{{ url_for('logs') }}"><i class="fas fa-list"></i> Logs</a>
+        </div>
+    </nav>
+    
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <div class="card">
+            <h2>System Status</h2>
+            
+            <div class="flex-between">
+                <div>
+                    <p>
+                        <span class="status-indicator status-{{ status.lower() }}"></span>
+                        Current State: <strong>{{ status }}</strong>
+                    </p>
+                    
+                    {% if error_message and status == "ERROR" %}
+                    <div class="error-message">
+                        <h3>Error Details:</h3>
+                        <p>{{ error_message }}</p>
+                    </div>
+                    {% endif %}
+                </div>
+                
+                <div>
+                    <button class="btn btn-warning" onclick="refreshPage()"><i class="fas fa-sync"></i> Refresh</button>
+                </div>
+            </div>
+            
+            <div class="grid">
+                <div class="stat-box">
+                    <div class="stat-icon">
+                        <i class="fas fa-clock"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h4>Uptime</h4>
+                        <p>{{ uptime }}</p>
+                    </div>
+                </div>
+                
+                <div class="stat-box">
+                    <div class="stat-icon">
+                        <i class="fas fa-microchip"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h4>CPU Usage</h4>
+                        <p>{{ cpu_usage }}%</p>
+                    </div>
+                </div>
+                
+                <div class="stat-box">
+                    <div class="stat-icon">
+                        <i class="fas fa-memory"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h4>Memory Usage</h4>
+                        <p>{{ memory_usage }}%</p>
+                    </div>
+                </div>
+                
+                <div class="stat-box">
+                    <div class="stat-icon">
+                        <i class="fas fa-thermometer-half"></i>
+                    </div>
+                    <div class="stat-info">
+                        <h4>Temperature</h4>
+                        <p>{{ temperature if temperature != 'N/A' else 'N/A' }}{{ '°C' if temperature != 'N/A' else '' }}</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="grid">
+            <div class="card">
+                <h2>Recent State Transitions</h2>
+                {% if recent_transitions %}
+                <ul class="transitions-list">
+                    {% for transition in recent_transitions %}
+                        <li>
+                            <span class="time">{{ transition.time }}</span>
+                            <span class="state">{{ transition.old_state }}</span>
+                            <span class="arrow"><i class="fas fa-arrow-right"></i></span>
+                            <span class="state">{{ transition.new_state }}</span>
+                        </li>
+                    {% endfor %}
+                </ul>
+                <p><a href="{{ url_for('logs') }}" class="btn btn-small">View Logs <i class="fas fa-arrow-right"></i></a></p>
+                {% else %}
+                <p>No state transitions recorded yet.</p>
+                {% endif %}
+            </div>
+            
+            <div class="card">
+                <h2>Recent Activity</h2>
+                {% if recent_activities %}
+                <ul class="activity-list">
+                    {% for activity in recent_activities %}
+                        <li>
+                            <span class="time">{{ activity.time }}</span>
+                            {{ activity.description }}
+                        </li>
+                    {% endfor %}
+                </ul>
+                {% else %}
+                <p>No recent activities.</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Quick Actions</h2>
+            <form method="post" action="{{ url_for('perform_action') }}" id="actionForm">
+                <div class="flex">
+                    <button type="button" class="btn" onclick="confirmAction('restart', 'Are you sure you want to restart EchoCore? This will reset the system state.')"><i class="fas fa-redo"></i> Reset System</button>
+                    <button type="button" class="btn btn-secondary" onclick="confirmAction('reset_conversation', 'Are you sure you want to reset the conversation history?')"><i class="fas fa-eraser"></i> Reset Conversation</button>
+                    <button type="button" class="btn" onclick="confirmAction('test_audio', 'Play a test sound?')"><i class="fas fa-volume-up"></i> Test Audio</button>
+                </div>
+                <input type="hidden" id="action" name="action" value="">
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        function refreshPage() {
+            window.location.reload();
+        }
+        
+        function confirmAction(action, message) {
+            if (confirm(message)) {
+                document.getElementById('action').value = action;
+                document.getElementById('actionForm').submit();
+            }
+        }
+    </script>
+</body>
+</html>
