@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EchoCore Logs</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+</head>
+<body>
+    <header>
+        <div class="container">
+            <h1><i class="fas fa-list"></i> EchoCore Logs</h1>
+        </div>
+    </header>
+    <nav>
+        <div class="container">
+            <a href="{{ url_for('index') }}"><i class="fas fa-tachometer-alt"></i> Dashboard</a>
+            <a href="{{ url_for('settings') }}"><i class="fas fa-cogs"></i> Settings</a>
+            <a href="{{ url_for('logs') }}"><i class="fas fa-list"></i> Logs</a>
+        </div>
+    </nav>
+    
+    <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div class="alert alert-{{ category }}">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        <div class="card">
+            <h2>System Logs</h2>
+            
+            <div class="filter-controls">
+                <select id="log-level" onchange="filterLogs()">
+                    <option value="all">All Levels</option>
+                    <option value="debug">Debug</option>
+                    <option value="info">Info</option>
+                    <option value="warning">Warning</option>
+                    <option value="error">Error</option>
+                </select>
+                
+                <input type="text" id="log-filter" placeholder="Filter by keyword..." onkeyup="filterLogs()">
+                
+                <button onclick="refreshLogs()" class="btn"><i class="fas fa-sync"></i> Refresh</button>
+                <button onclick="clearLogsDisplay()" class="btn"><i class="fas fa-eraser"></i> Clear Display</button>
+                <a href="{{ url_for('download_logs') }}" class="btn"><i class="fas fa-download"></i> Download</a>
+            </div>
+            
+            <div class="log-container" id="log-container">
+                {% for log in logs %}
+                    <pre class="log-line log-{{ log.level_class }}">{{ log.timestamp }} [{{ log.level }}] {{ log.message }}</pre>
+                {% endfor %}
+            </div>
+            
+            <div class="auto-refresh">
+                <label>
+                    <input type="checkbox" id="auto-refresh" checked onchange="toggleAutoRefresh()">
+                    Auto-refresh logs every 
+                    <select id="refresh-interval" onchange="updateRefreshInterval()">
+                        <option value="5">5</option>
+                        <option value="10" selected>10</option>
+                        <option value="30">30</option>
+                        <option value="60">60</option>
+                    </select>
+                    seconds
+                </label>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let refreshTimer = null;
+        let lastLogCount = {{ logs|length }};
+        
+        // Function to filter logs based on level and keyword
+        function filterLogs() {
+            const level = document.getElementById('log-level').value;
+            const keyword = document.getElementById('log-filter').value.toLowerCase();
+            const logs = document.querySelectorAll('.log-line');
+            
+            logs.forEach(log => {
+                const logText = log.textContent.toLowerCase();
+                const showByLevel = level === 'all' || log.classList.contains('log-' + level);
+                const showByKeyword = keyword === '' || logText.includes(keyword);
+                
+                if (showByLevel && showByKeyword) {
+                    log.style.display = 'block';
+                } else {
+                    log.style.display = 'none';
+                }
+            });
+        }
+        
+        // Function to clear the logs display
+        function clearLogsDisplay() {
+            if (confirm('Are you sure you want to clear the logs display? This does not delete log files.')) {
+                document.getElementById('log-container').innerHTML = '';
+                lastLogCount = 0;
+            }
+        }
+        
+        // Function to refresh logs via AJAX
+        function refreshLogs() {
+            fetch('/api/logs?count=100')
+                .then(response => response.json())
+                .then(data => {
+                    const container = document.getElementById('log-container');
+                    const logs = data.logs;
+                    
+                    // Only completely replace if we have new logs
+                    if (logs.length !== lastLogCount) {
+                        container.innerHTML = '';
+                        logs.forEach(log => {
+                            const logElement = document.createElement('pre');
+                            logElement.className = `log-line log-${log.level_class}`;
+                            logElement.textContent = `${log.timestamp} [${log.level}] ${log.message}`;
+                            container.appendChild(logElement);
+                        });
+                        lastLogCount = logs.length;
+                        
+                        // Apply filters to new logs
+                        filterLogs();
+                        
+                        // Scroll to bottom of log container
+                        container.scrollTop = container.scrollHeight;
+                    }
+                })
+                .catch(error => {
+                    console.error('Error refreshing logs:', error);
+                });
+        }
+        
+        // Function to toggle auto-refresh
+        function toggleAutoRefresh() {
+            const autoRefresh = document.getElementById('auto-refresh').checked;
+            
+            if (autoRefresh) {
+                updateRefreshInterval();
+            } else {
+                clearInterval(refreshTimer);
+                refreshTimer = null;
+            }
+        }
+        
+        // Function to update refresh interval
+        function updateRefreshInterval() {
+            const intervalSeconds = parseInt(document.getElementById('refresh-interval').value);
+            
+            // Clear existing timer
+            if (refreshTimer) {
+                clearInterval(refreshTimer);
+            }
+            
+            // Set new timer if auto-refresh is enabled
+            if (document.getElementById('auto-refresh').checked) {
+                refreshTimer = setInterval(refreshLogs, intervalSeconds * 1000);
+            }
+        }
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Scroll to bottom of log container initially
+            const container = document.getElementById('log-container');
+            container.scrollTop = container.scrollHeight;
+            
+            // Set up auto-refresh
+            toggleAutoRefresh();
+        });
+    </script>
+</body>
+</html>
