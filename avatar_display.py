@@ -307,6 +307,45 @@ class AvatarDisplay(threading.Thread):
             text_surface.blit(text_surface_alpha, (0, 0), special_flags=pygame.BLEND_RGBA_MULT)
             
             self.screen.blit(text_surface, text_rect)
+
+    def _draw_error_message(self):
+        """Draw the current error message when in ERROR state."""
+        if not self.state_manager.is_state(State.ERROR):
+            return
+        
+        error_message = self.state_manager.get_error_message()
+        if not error_message:
+            return
+        
+        # Create text surfaces for multiline error message
+        max_line_width = config.AVATAR_WINDOW_WIDTH - 40  # Padding
+        lines = []
+    
+        # Split error message into lines that fit the width
+        words = error_message.split()
+        current_line = ""
+    
+        for word in words:
+            test_line = current_line + " " + word if current_line else word
+            test_surface = self.font.render(test_line, True, (255, 255, 255))
+        
+            if test_surface.get_width() <= max_line_width:
+                current_line = test_line
+            else:
+                if current_line:
+                    lines.append(current_line)
+                current_line = word
+            
+        if current_line:
+            lines.append(current_line)
+    
+        # Render each line
+        y_pos = config.AVATAR_WINDOW_HEIGHT - (len(lines) * 25) - 40
+        for line in lines:
+            text_surface = self.font.render(line, True, (255, 255, 255))
+            text_rect = text_surface.get_rect(center=(config.AVATAR_WINDOW_WIDTH // 2, y_pos))
+            self.screen.blit(text_surface, text_rect)
+            y_pos += 25
     
     def _update_effects(self):
         """Update animation effects."""
