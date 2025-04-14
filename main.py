@@ -10,6 +10,7 @@ import time
 import signal
 import sys
 import logging
+from logging.handlers import RotatingFileHandler
 
 # Import project modules
 import config
@@ -24,10 +25,14 @@ from avatar_display import AvatarDisplay
 # --- Setup Logging ---
 logging.basicConfig(
     level=config.LOG_LEVEL, 
-    format='%(asctime)s - %(levelname)s - %(threadName)s - %(message)s',
+    format=config.LOG_FORMAT,
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("echocore.log")
+        RotatingFileHandler(
+            config.LOG_FILE,
+            maxBytes=config.LOG_MAX_SIZE,
+            backupCount=config.LOG_BACKUP_COUNT
+        )
     ]
 )
 logger = logging.getLogger(__name__)
