@@ -8,12 +8,12 @@ import queue
 import time
 import io
 import os
-import wave # For Piper WAV output handling
-import subprocess # For Piper executable interaction
+import wave  # For Piper WAV output handling
 import logging
 from openai import OpenAI, APIConnectionError, APITimeoutError, AuthenticationError
 import config
 from state_manager import StateManager, State
+from piper_tts import PiperClient  # Add this import
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -39,7 +39,8 @@ class TTSSynthesizer(threading.Thread):
         self.stop_event = stop_event
         self.openai_client = None
         self.elevenlabs_client = None
-        self.online_mode = True # Assume online unless API keys missing or errors occur
+        self.piper_client = None  # Add this for Piper client
+        self.online_mode = True  # Assume online unless API keys missing or errors occur
         self.reconnect_attempt_time = 0
         self.reconnect_cooldown = 60  # seconds between reconnection attempts
         self.last_error = None  # Track the last error for reporting
@@ -87,6 +88,34 @@ class TTSSynthesizer(threading.Thread):
             self.last_error = "ELEVENLABS_API_KEY not found for ElevenLabs TTS."
             logger.warning(f"Warning: {self.last_error}")
             return False
+            
+    def _init_piper_client(self):
+        """Initialize the Piper TTS client."""
+        try:
+            logger.info("Initializing Piper TTS client...")
+            self.piper_client = PiperClient()
+            
+            # Check if initialization was successful
+            if self.piper_client.last_error:
+                self.last_error = self.piper_client.last_error
+                logger.error(f"Piper initialization error: {self.last_error}")
+                self.state_manager.set_state(State.ERROR)
+                return False
+                
+            # Get voice info for logging
+            voice_info = self.piper_client.get_voice_info()
+            if voice_info:
+                logger.info(f"Piper voice initialized: {voice_info.get('model_name', 'Unknown')}")
+                
+            # Piper is offline but functional if we reached here
+            logger.info("Piper TTS client initialized successfully (offline mode).")
+            return True
+            
+        except Exception as e:
+            self.last_error = f"Error initializing Piper TTS client: {e}"
+            logger.exception(self.last_error)
+            self.state_manager.set_state(State.ERROR)
+            return False
 
     def _init_client(self):
         """Initialize the selected TTS engine."""
@@ -95,16 +124,7 @@ class TTSSynthesizer(threading.Thread):
         elif config.TTS_ENGINE == 'elevenlabs':
             self.online_mode = self._init_elevenlabs_client()
         elif config.TTS_ENGINE == 'piper':
-            logger.info("Piper TTS selected (local engine).")
-            # Check if model file exists
-            if not os.path.exists(config.PIPER_MODEL_PATH):
-                self.last_error = f"Piper model not found at {config.PIPER_MODEL_PATH}"
-                logger.error(f"ERROR: {self.last_error}")
-                self.state_manager.set_state(State.ERROR)
-                self.online_mode = False
-            else:
-                # Piper is always offline but functional if model exists
-                self.online_mode = False
+            self.online_mode = self._init_piper_client()
         else:
             self.last_error = f"Unknown TTS_ENGINE configured: {config.TTS_ENGINE}"
             logger.error(f"ERROR: {self.last_error}")
@@ -156,7 +176,7 @@ class TTSSynthesizer(threading.Thread):
                         audio_stream = self._synthesize_openai(text_to_speak)
                     elif config.TTS_ENGINE == 'elevenlabs' and self.elevenlabs_client and self.online_mode:
                         audio_stream = self._synthesize_elevenlabs(text_to_speak)
-                    elif config.TTS_ENGINE == 'piper':
+                    elif config.TTS_ENGINE == 'piper' and self.piper_client:
                         audio_stream = self._synthesize_piper(text_to_speak)
                     else:
                         # Fallback if online failed or Piper selected but failed init
@@ -271,38 +291,24 @@ class TTSSynthesizer(threading.Thread):
         return None # Indicate failure
 
     def _synthesize_piper(self, text):
-        """Synthesize speech using local Piper TTS executable and return audio stream."""
+        """Synthesize speech using local Piper TTS client and return audio stream."""
         try:
             logger.info("Synthesizing with Piper TTS (local)...")
-            # Piper command line usage: echo 'text' | piper --model <model.onnx> --output_raw
-
-            # Build the command with proper parameters
-            command = ["piper", "--model", config.PIPER_MODEL_PATH, "--output_raw"]
-            if config.PIPER_CONFIG_PATH:
-                command.extend(["--config", config.PIPER_CONFIG_PATH])
-            if config.PIPER_SPEAKER_ID is not None:
-                command.extend(["--speaker", str(config.PIPER_SPEAKER_ID)])
-
-            # Start the Piper process
-            process = subprocess.Popen(
-                command,
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
+            
+            # Use the PiperClient to handle synthesis with streaming
+            audio_stream = self.piper_client.generate(
+                text=text,
+                stream=True,
+                output_format="pcm_16000"
             )
+            
+            if not audio_stream:
+                self.last_error = self.piper_client.get_last_error() or "Piper synthesis failed with no error details"
+                logger.error(self.last_error)
+                return None
+                
+            return audio_stream
 
-            # Send text to Piper's stdin (ensure correct encoding)
-            # Add newline as Piper often expects it
-            process.stdin.write((text + '\n').encode('utf-8'))
-            process.stdin.close() # Signal end of input
-
-            # Return the stdout stream for reading audio data
-            return process.stdout
-
-        except FileNotFoundError:
-            self.last_error = "ERROR: 'piper' command not found. Is Piper TTS installed and in PATH?"
-            logger.error(self.last_error)
-            self.state_manager.set_state(State.ERROR)
         except Exception as e:
             self.last_error = f"Piper TTS Error: {e}"
             logger.exception(self.last_error)
