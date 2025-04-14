@@ -82,7 +82,7 @@ class AvatarDisplay(threading.Thread):
                 while not self.avatar_queue.empty():
                     amplitude = self.avatar_queue.get_nowait()
                     self.current_amplitude = amplitude
-                    
+                
                     # Add to history for smoother visualization
                     self.amplitude_history.append(amplitude)
                     if len(self.amplitude_history) > self.history_max_length:
@@ -92,12 +92,12 @@ class AvatarDisplay(threading.Thread):
 
             # --- Get Current State ---
             current_state = self.state_manager.get_state()
-            
+        
             # Check for state transition
             if current_state != self.previous_state:
                 self.transition_effect = 1.0  # Start transition effect
                 self.previous_state = current_state
-                
+            
                 # Update status text based on state
                 if current_state == State.IDLE:
                     self.status_text = "Ready"
@@ -113,7 +113,7 @@ class AvatarDisplay(threading.Thread):
                     self.status_text = "Speaking..."
                 elif current_state == State.ERROR:
                     self.status_text = "Error occurred"
-                
+            
                 # Make status visible
                 self.status_alpha = 255
 
@@ -121,6 +121,15 @@ class AvatarDisplay(threading.Thread):
             self.screen.fill(config.AVATAR_BACKGROUND_COLOR)
             self._draw_enhanced_avatar(current_state)
             self._draw_status_text()
+        
+            # Draw error message if in ERROR state
+        if current_state == State.ERROR:
+            self._draw_error_message()
+            
+            # Draw debug overlay if enabled
+            if config.AVATAR_DEBUG_OVERLAY:
+                self._draw_debug_overlay(current_state)
+            
             pygame.display.flip()
 
             # --- Update Effects ---
