@@ -1,37 +1,45 @@
-# Core
-python-dotenv>=0.19.0
-numpy>=1.20.0
-requests>=2.28.0
-tqdm>=4.64.0
+# Project EchoCore Python Dependencies
 
-# Audio I/O
-sounddevice>=0.4.4
+# --- Core & Utilities ---
+python-dotenv>=0.19.0   # For loading environment variables (.env file)
+numpy>=1.20.0           # Numerical operations (audio processing, effects)
+requests>=2.28.0        # For downloading models (used by model_downloader.py)
+tqdm>=4.64.0            # Progress bars (used by model_downloader.py)
 
-# Wake Word
-pvporcupine>=2.1.0
+# --- Audio Processing ---
+sounddevice>=0.4.6      # Audio I/O via PortAudio (ensure latest stable if issues occur)
 
-# STT
-vosk>=0.3.42
+# --- Wake Word Detection ---
+# Requires manual model download from Picovoice Console
+pvporcupine>=2.1.0      # Picovoice Porcupine wake word engine
 
-# LLM
-openai>=1.0.0
+# --- Speech-to-Text (STT) ---
+# Requires manual model download from Vosk website
+vosk>=0.3.42            # Vosk offline STT engine
 
-# TTS (Choose based on config.TTS_ENGINE)
-elevenlabs>=0.2.0 # If using ElevenLabs
-# piper-tts>=1.2.0 # If using Piper (installation might need specific steps/build)
+# --- Language Model (LLM) ---
+# Requires OpenAI API Key in .env
+openai>=1.3.0           # OpenAI API client (ensure >= 1.0.0 for new API)
 
-# Avatar
-pygame>=2.0.1
+# --- Text-to-Speech (TTS) ---
+# Install based on the TTS_ENGINE selected in config.py or user_config.json
 
-# Web Interface
-flask>=2.0.0
-flask-httpauth>=4.2.0
+# Optional: ElevenLabs TTS Client (if TTS_ENGINE='elevenlabs')
+# Requires ELEVENLABS_API_KEY in .env
+# elevenlabs>=0.2.27 # Use 'pip install elevenlabs' to get the latest version if needed
 
-# System Monitoring
-psutil>=5.8.0
+# Note: Piper TTS is executed via command-line, no specific Python package required here,
+# but the 'piper' executable must be installed and in the system PATH.
+# See Piper TTS documentation for installation instructions.
 
-# Logging
-python-json-logger>=2.0.0
+# --- Avatar Display ---
+pygame>=2.1.0           # For graphical avatar display (ensure latest stable)
 
-# Optional: Sentiment Analysis
-# vaderSentiment>=3.3.2
+# --- Web Interface ---
+# Required if WEB_INTERFACE_ENABLED = True
+Flask>=2.0.0            # Web framework
+Flask-HTTPAuth>=4.2.0   # Basic authentication for Flask
+
+# --- System Monitoring ---
+# Optional: Used by web interface for displaying system stats
+psutil>=5.8.0           # Cross-platform process and system utilities
