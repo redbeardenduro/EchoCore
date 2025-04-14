@@ -7,12 +7,14 @@ import json
 import logging
 import threading
 import time
+import datetime
 from pathlib import Path
-from flask import Flask, request, render_template, redirect, url_for, flash, jsonify, Response
+from flask import Flask, request, render_template, redirect, url_for, flash, jsonify, Response, send_from_directory
 from flask_httpauth import HTTPBasicAuth
 from functools import wraps
 import config
 from state_manager import StateManager, State
+from audio_utils import list_audio_devices, test_audio_device
 
 # Setup logger
 logger = logging.getLogger(__name__)
@@ -25,445 +27,15 @@ app = Flask(__name__,
 app.secret_key = os.urandom(24)
 auth = HTTPBasicAuth()
 
-# Directory creation
+# Create directories for templates and static files
 os.makedirs(os.path.join(os.path.dirname(__file__), 'templates'), exist_ok=True)
 os.makedirs(os.path.join(os.path.dirname(__file__), 'static'), exist_ok=True)
-
-# Create simple CSS file
-css_path = os.path.join(os.path.dirname(__file__), 'static', 'style.css')
-if not os.path.exists(css_path):
-    with open(css_path, 'w') as f:
-        f.write("""
-body {
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    margin: 0;
-    padding: 0;
-    background-color: #121212;
-    color: #e0e0e0;
-}
-.container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 20px;
-}
-header {
-    background-color: #1e1e1e;
-    padding: 20px;
-    border-bottom: 1px solid #333;
-}
-header h1 {
-    margin: 0;
-    color: #5c9ce6;
-}
-nav {
-    background-color: #282828;
-    padding: 10px 20px;
-}
-nav a {
-    color: #e0e0e0;
-    text-decoration: none;
-    margin-right: 20px;
-    font-weight: bold;
-}
-nav a:hover {
-    color: #5c9ce6;
-}
-.card {
-    background-color: #1e1e1e;
-    border-radius: 5px;
-    padding: 20px;
-    margin-bottom: 20px;
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
-}
-.card h2 {
-    margin-top: 0;
-    color: #5c9ce6;
-    border-bottom: 1px solid #333;
-    padding-bottom: 10px;
-}
-label {
-    display: block;
-    margin-bottom: 5px;
-    font-weight: bold;
-}
-input, select, textarea {
-    width: 100%;
-    padding: 8px;
-    margin-bottom: 15px;
-    background-color: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #e0e0e0;
-}
-button {
-    background-color: #5c9ce6;
-    color: white;
-    border: none;
-    padding: 10px 15px;
-    border-radius: 4px;
-    cursor: pointer;
-    font-weight: bold;
-}
-button:hover {
-    background-color: #4a7dbb;
-}
-.alert {
-    padding: 10px;
-    border-radius: 4px;
-    margin-bottom: 15px;
-}
-.alert-success {
-    background-color: #2e7d32;
-    color: white;
-}
-.alert-danger {
-    background-color: #c62828;
-    color: white;
-}
-.status-indicator {
-    display: inline-block;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    margin-right: 8px;
-}
-.status-idle { background-color: #4a7dbb; }
-.status-listening { background-color: #ffd700; }
-.status-thinking { background-color: #ff9800; }
-.status-speaking { background-color: #4caf50; }
-.status-error { background-color: #f44336; }
-.log-container {
-    background-color: #121212;
-    border: 1px solid #333;
-    border-radius: 4px;
-    padding: 10px;
-    height: 300px;
-    overflow-y: auto;
-    font-family: monospace;
-    margin-bottom: 15px;
-}
-.log-line {
-    margin: 0;
-    padding: 2px 0;
-    border-bottom: 1px solid #222;
-}
-.form-group {
-    margin-bottom: 20px;
-}
-.grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 20px;
-}
-@media (max-width: 768px) {
-    .grid {
-        grid-template-columns: 1fr;
-    }
-}
-""")
-
-# Create template files
-templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
-
-# Index template
-index_template = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EchoCore Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-    <meta http-equiv="refresh" content="10">
-</head>
-<body>
-    <header>
-        <div class="container">
-            <h1>EchoCore Dashboard</h1>
-        </div>
-    </header>
-    <nav>
-        <div class="container">
-            <a href="{{ url_for('index') }}">Dashboard</a>
-            <a href="{{ url_for('settings') }}">Settings</a>
-            <a href="{{ url_for('logs') }}">Logs</a>
-        </div>
-    </nav>
-    
-    <div class="container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        
-        <div class="card">
-            <h2>System Status</h2>
-            <p>
-                <span class="status-indicator status-{{ status.lower() }}"></span>
-                Current State: <strong>{{ status }}</strong>
-            </p>
-            <p>Uptime: {{ uptime }}</p>
-            <p>CPU Usage: {{ cpu_usage }}%</p>
-            <p>Memory Usage: {{ memory_usage }}%</p>
-            <p>Temperature: {{ temperature }}°C</p>
-        </div>
-        
-        <div class="grid">
-            <div class="card">
-                <h2>State Transitions</h2>
-                <canvas id="stateChart" width="400" height="200"></canvas>
-            </div>
-            
-            <div class="card">
-                <h2>Recent Activity</h2>
-                <ul>
-                    {% for activity in recent_activities %}
-                        <li>{{ activity.time }}: {{ activity.description }}</li>
-                    {% endfor %}
-                </ul>
-            </div>
-        </div>
-        
-        <div class="card">
-            <h2>Quick Actions</h2>
-            <form method="post" action="{{ url_for('perform_action') }}">
-                <button type="submit" name="action" value="restart">Restart EchoCore</button>
-                <button type="submit" name="action" value="reset_conversation">Reset Conversation</button>
-                <button type="submit" name="action" value="test_audio">Test Audio</button>
-            </form>
-        </div>
-    </div>
-    
-    <script>
-        // Simple placeholder for chart - would use Chart.js in production
-        const ctx = document.getElementById('stateChart').getContext('2d');
-        // Chart rendering code would go here
-    </script>
-</body>
-</html>
-"""
-
-# Settings template
-settings_template = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EchoCore Settings</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <header>
-        <div class="container">
-            <h1>EchoCore Settings</h1>
-        </div>
-    </header>
-    <nav>
-        <div class="container">
-            <a href="{{ url_for('index') }}">Dashboard</a>
-            <a href="{{ url_for('settings') }}">Settings</a>
-            <a href="{{ url_for('logs') }}">Logs</a>
-        </div>
-    </nav>
-    
-    <div class="container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-            {% if messages %}
-                {% for category, message in messages %}
-                    <div class="alert alert-{{ category }}">{{ message }}</div>
-                {% endfor %}
-            {% endif %}
-        {% endwith %}
-        
-        <form method="post" action="{{ url_for('save_settings') }}">
-            <div class="card">
-                <h2>General Settings</h2>
-                <div class="form-group">
-                    <label for="LISTENING_TIMEOUT">Listening Timeout (seconds)</label>
-                    <input type="number" id="LISTENING_TIMEOUT" name="LISTENING_TIMEOUT" value="{{ config.LISTENING_TIMEOUT }}" step="0.1" min="1">
-                </div>
-                <div class="form-group">
-                    <label for="STT_CONFIDENCE_THRESHOLD">Speech Recognition Confidence Threshold</label>
-                    <input type="number" id="STT_CONFIDENCE_THRESHOLD" name="STT_CONFIDENCE_THRESHOLD" value="{{ config.STT_CONFIDENCE_THRESHOLD }}" step="0.01" min="0" max="1">
-                </div>
-                <div class="form-group">
-                    <label for="AVATAR_ANIMATION_STYLE">Avatar Animation Style</label>
-                    <select id="AVATAR_ANIMATION_STYLE" name="AVATAR_ANIMATION_STYLE">
-                        <option value="circle" {% if config.AVATAR_ANIMATION_STYLE == 'circle' %}selected{% endif %}>Circle</option>
-                        <option value="wave" {% if config.AVATAR_ANIMATION_STYLE == 'wave' %}selected{% endif %}>Wave</option>
-                        <option value="particle" {% if config.AVATAR_ANIMATION_STYLE == 'particle' %}selected{% endif %}>Particle</option>
-                        <option value="hologram" {% if config.AVATAR_ANIMATION_STYLE == 'hologram' %}selected{% endif %}>Hologram</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="ENABLE_AUDIO_CUES">Enable Audio Cues</label>
-                    <input type="checkbox" id="ENABLE_AUDIO_CUES" name="ENABLE_AUDIO_CUES" {% if config.ENABLE_AUDIO_CUES %}checked{% endif %}>
-                </div>
-            </div>
-            
-            <div class="card">
-                <h2>LLM Settings</h2>
-                <div class="form-group">
-                    <label for="LLM_MODEL">OpenAI Model</label>
-                    <select id="LLM_MODEL" name="LLM_MODEL">
-                        <option value="gpt-4o" {% if config.LLM_MODEL == 'gpt-4o' %}selected{% endif %}>GPT-4o</option>
-                        <option value="gpt-4o-mini" {% if config.LLM_MODEL == 'gpt-4o-mini' %}selected{% endif %}>GPT-4o Mini</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="LLM_MAX_CONVERSATION_TURNS">Max Conversation History</label>
-                    <input type="number" id="LLM_MAX_CONVERSATION_TURNS" name="LLM_MAX_CONVERSATION_TURNS" value="{{ config.LLM_MAX_CONVERSATION_TURNS }}" min="1" max="20">
-                </div>
-                <div class="form-group">
-                    <label for="LLM_SYSTEM_PROMPT">System Prompt</label>
-                    <textarea id="LLM_SYSTEM_PROMPT" name="LLM_SYSTEM_PROMPT" rows="4">{{ config.LLM_SYSTEM_PROMPT }}</textarea>
-                </div>
-            </div>
-            
-            <div class="card">
-                <h2>TTS Settings</h2>
-                <div class="form-group">
-                    <label for="TTS_ENGINE">TTS Engine</label>
-                    <select id="TTS_ENGINE" name="TTS_ENGINE">
-                        <option value="openai" {% if config.TTS_ENGINE == 'openai' %}selected{% endif %}>OpenAI</option>
-                        <option value="elevenlabs" {% if config.TTS_ENGINE == 'elevenlabs' %}selected{% endif %}>ElevenLabs</option>
-                        <option value="piper" {% if config.TTS_ENGINE == 'piper' %}selected{% endif %}>Piper (Local)</option>
-                    </select>
-                </div>
-                <div class="form-group openai-options" {% if config.TTS_ENGINE != 'openai' %}style="display:none;"{% endif %}>
-                    <label for="OPENAI_TTS_VOICE">OpenAI Voice</label>
-                    <select id="OPENAI_TTS_VOICE" name="OPENAI_TTS_VOICE">
-                        <option value="alloy" {% if config.OPENAI_TTS_VOICE == 'alloy' %}selected{% endif %}>Alloy</option>
-                        <option value="echo" {% if config.OPENAI_TTS_VOICE == 'echo' %}selected{% endif %}>Echo</option>
-                        <option value="fable" {% if config.OPENAI_TTS_VOICE == 'fable' %}selected{% endif %}>Fable</option>
-                        <option value="onyx" {% if config.OPENAI_TTS_VOICE == 'onyx' %}selected{% endif %}>Onyx</option>
-                        <option value="nova" {% if config.OPENAI_TTS_VOICE == 'nova' %}selected{% endif %}>Nova</option>
-                        <option value="shimmer" {% if config.OPENAI_TTS_VOICE == 'shimmer' %}selected{% endif %}>Shimmer</option>
-                    </select>
-                </div>
-                <div class="form-group elevenlabs-options" {% if config.TTS_ENGINE != 'elevenlabs' %}style="display:none;"{% endif %}>
-                    <label for="ELEVENLABS_VOICE">ElevenLabs Voice</label>
-                    <input type="text" id="ELEVENLABS_VOICE" name="ELEVENLABS_VOICE" value="{{ config.ELEVENLABS_VOICE }}">
-                </div>
-            </div>
-            
-            <button type="submit">Save Settings</button>
-        </form>
-    </div>
-    
-    <script>
-        document.getElementById('TTS_ENGINE').addEventListener('change', function() {
-            const engine = this.value;
-            document.querySelectorAll('.openai-options, .elevenlabs-options').forEach(el => {
-                el.style.display = 'none';
-            });
-            if (engine === 'openai') {
-                document.querySelectorAll('.openai-options').forEach(el => {
-                    el.style.display = 'block';
-                });
-            } else if (engine === 'elevenlabs') {
-                document.querySelectorAll('.elevenlabs-options').forEach(el => {
-                    el.style.display = 'block';
-                });
-            }
-        });
-    </script>
-</body>
-</html>
-"""
-
-# Logs template
-logs_template = """
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EchoCore Logs</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-</head>
-<body>
-    <header>
-        <div class="container">
-            <h1>EchoCore Logs</h1>
-        </div>
-    </header>
-    <nav>
-        <div class="container">
-            <a href="{{ url_for('index') }}">Dashboard</a>
-            <a href="{{ url_for('settings') }}">Settings</a>
-            <a href="{{ url_for('logs') }}">Logs</a>
-        </div>
-    </nav>
-    
-    <div class="container">
-        <div class="card">
-            <h2>System Logs</h2>
-            <div class="form-group">
-                <label for="log-level">Log Level</label>
-                <select id="log-level" onchange="filterLogs()">
-                    <option value="all">All</option>
-                    <option value="info">Info</option>
-                    <option value="warning">Warning</option>
-                    <option value="error">Error</option>
-                </select>
-            </div>
-            <div class="log-container" id="log-container">
-                {% for log in logs %}
-                    <pre class="log-line log-{{ log.level|lower }}">{{ log.timestamp }} [{{ log.level }}] {{ log.message }}</pre>
-                {% endfor %}
-            </div>
-            <button onclick="clearLogs()">Clear Logs</button>
-            <button onclick="downloadLogs()">Download Logs</button>
-        </div>
-    </div>
-    
-    <script>
-        function filterLogs() {
-            const level = document.getElementById('log-level').value;
-            const logs = document.querySelectorAll('.log-line');
-            
-            logs.forEach(log => {
-                if (level === 'all' || log.classList.contains('log-' + level)) {
-                    log.style.display = 'block';
-                } else {
-                    log.style.display = 'none';
-                }
-            });
-        }
-        
-        function clearLogs() {
-            if (confirm('Are you sure you want to clear the logs display? This does not delete log files.')) {
-                document.getElementById('log-container').innerHTML = '';
-            }
-        }
-        
-        function downloadLogs() {
-            window.location.href = "{{ url_for('download_logs') }}";
-        }
-    </script>
-</body>
-</html>
-"""
-
-# Save template files
-with open(os.path.join(templates_dir, 'index.html'), 'w') as f:
-    f.write(index_template)
-    
-with open(os.path.join(templates_dir, 'settings.html'), 'w') as f:
-    f.write(settings_template)
-    
-with open(os.path.join(templates_dir, 'logs.html'), 'w') as f:
-    f.write(logs_template)
 
 # Global variables
 start_time = time.time()
 recent_activities = []
 state_transitions = []
+audio_devices_cache = None  # Cache for audio devices list
 
 # Authentication
 @auth.verify_password
@@ -536,6 +108,19 @@ def add_activity(description):
     if len(recent_activities) > 10:
         recent_activities = recent_activities[:10]
 
+def add_state_transition(old_state, new_state):
+    """Add state transition to history."""
+    global state_transitions
+    timestamp = time.strftime("%H:%M:%S")
+    state_transitions.append({
+        'time': timestamp,
+        'old_state': old_state.name if old_state else "None",
+        'new_state': new_state.name
+    })
+    # Keep only the last 100 transitions
+    if len(state_transitions) > 100:
+        state_transitions = state_transitions[1:]
+
 def load_logs(n_lines=100):
     """Load the last n lines from the log file."""
     log_lines = []
@@ -544,18 +129,34 @@ def load_logs(n_lines=100):
     if os.path.exists(log_path):
         try:
             with open(log_path, 'r') as f:
-                lines = f.readlines()[-n_lines:]
+                # Get the last n lines efficiently
+                lines = []
+                for line in f:
+                    lines.append(line)
+                    if len(lines) > n_lines:
+                        lines.pop(0)
                 
             for line in lines:
-                # Basic parsing, would need to be adjusted based on actual log format
+                # Basic parsing of log lines based on format
                 parts = line.split(" - ")
                 if len(parts) >= 3:
                     timestamp = parts[0]
                     level = parts[1]
                     message = " - ".join(parts[2:])
+                    
+                    # Determine level class for styling
+                    level_class = "info"
+                    if "ERROR" in level:
+                        level_class = "error"
+                    elif "WARNING" in level:
+                        level_class = "warning"
+                    elif "DEBUG" in level:
+                        level_class = "debug"
+                        
                     log_lines.append({
                         'timestamp': timestamp,
                         'level': level.strip(),
+                        'level_class': level_class,
                         'message': message.strip()
                     })
         except Exception as e:
@@ -563,10 +164,32 @@ def load_logs(n_lines=100):
             log_lines.append({
                 'timestamp': time.strftime("%Y-%m-%d %H:%M:%S"),
                 'level': 'ERROR',
+                'level_class': 'error',
                 'message': f"Error reading log file: {e}"
             })
     
     return log_lines
+
+def get_audio_devices():
+    """Get audio input and output devices."""
+    global audio_devices_cache
+    
+    if audio_devices_cache is None:
+        try:
+            inputs, outputs = list_audio_devices()
+            audio_devices_cache = {
+                'inputs': inputs,
+                'outputs': outputs
+            }
+        except Exception as e:
+            logger.error(f"Error listing audio devices: {e}")
+            audio_devices_cache = {
+                'inputs': [],
+                'outputs': [],
+                'error': str(e)
+            }
+    
+    return audio_devices_cache
 
 def save_user_config(updated_config):
     """Save updated config to user_config.json."""
@@ -588,7 +211,7 @@ def save_user_config(updated_config):
         
         # Write back to file
         with open(config_path, 'w') as f:
-            json.dump(existing_config, f, indent=4)
+            json.dump(existing_config, f, indent=2)
             
         return True, "Settings saved successfully"
     except Exception as e:
@@ -606,19 +229,44 @@ def index():
     if state_obj:
         current_state = state_obj.get_state().name
     
+    # Get error message if in ERROR state
+    error_message = None
+    if state_obj and current_state == "ERROR":
+        error_message = state_obj.get_error_message()
+    
     return render_template('index.html', 
         status=current_state,
+        error_message=error_message,
         uptime=get_uptime(),
         cpu_usage=stats['cpu_usage'],
         memory_usage=stats['memory_usage'],
         temperature=stats['temperature'],
-        recent_activities=recent_activities
+        recent_activities=recent_activities,
+        recent_transitions=state_transitions[-5:] if state_transitions else []
     )
 
 @app.route('/settings', methods=['GET'])
 @login_required
 def settings():
-    return render_template('settings.html', config=config)
+    # Get audio devices
+    audio_devices = get_audio_devices()
+    
+    # Read user_config.json if it exists
+    user_config_path = os.path.join(os.path.dirname(__file__), 'user_config.json')
+    user_config = {}
+    if os.path.exists(user_config_path):
+        try:
+            with open(user_config_path, 'r') as f:
+                user_config = json.load(f)
+        except Exception as e:
+            flash(f"Error reading user config: {e}", "danger")
+    
+    return render_template('settings.html', 
+        config=config,
+        user_config=user_config,
+        audio_inputs=audio_devices.get('inputs', []),
+        audio_outputs=audio_devices.get('outputs', [])
+    )
 
 @app.route('/settings', methods=['POST'])
 @login_required
@@ -627,23 +275,46 @@ def save_settings():
     
     # Process form data - convert types appropriately
     for key, value in request.form.items():
-        if key in ['LISTENING_TIMEOUT', 'STT_CONFIDENCE_THRESHOLD']:
+        # Skip keys that start with "#" (comments in JSON)
+        if key.startswith('#'):
+            continue
+        
+        # Handle numeric values
+        if key in ['LISTENING_TIMEOUT', 'STT_CONFIDENCE_THRESHOLD', 'LLM_TEMPERATURE',
+                  'ELEVENLABS_STABILITY', 'ELEVENLABS_SIMILARITY', 'AUDIO_AMPLITUDE_SCALING_DIVISOR']:
             try:
                 updated_config[key] = float(value)
             except ValueError:
                 flash(f"Invalid value for {key}", "danger")
                 return redirect(url_for('settings'))
                 
-        elif key in ['LLM_MAX_CONVERSATION_TURNS']:
+        elif key in ['LLM_MAX_CONVERSATION_TURNS', 'LLM_MAX_TOKENS', 'LOG_MAX_SIZE', 
+                    'LOG_BACKUP_COUNT', 'AVATAR_WINDOW_WIDTH', 'AVATAR_WINDOW_HEIGHT',
+                    'AVATAR_MIN_RADIUS', 'AVATAR_FPS', 'WEB_INTERFACE_PORT']:
             try:
                 updated_config[key] = int(value)
             except ValueError:
                 flash(f"Invalid value for {key}", "danger")
                 return redirect(url_for('settings'))
                 
-        elif key in ['ENABLE_AUDIO_CUES']:
-            updated_config[key] = 'ENABLE_AUDIO_CUES' in request.form
+        # Handle boolean values  
+        elif key in ['ENABLE_AUDIO_CUES', 'TTS_STREAMING', 'TTS_CACHE_ENABLED',
+                    'AVATAR_DISPLAY_STATUS_TEXT', 'AVATAR_FULLSCREEN', 'AVATAR_DEBUG_OVERLAY',
+                    'WEB_INTERFACE_ENABLED', 'LLM_OFFLINE_FALLBACK_ENABLED']:
+            updated_config[key] = value == 'true'
             
+        # Handle special device index values
+        elif key in ['AUDIO_INPUT_DEVICE_INDEX', 'AUDIO_OUTPUT_DEVICE_INDEX']:
+            if value == 'null' or value == '':
+                updated_config[key] = None
+            else:
+                try:
+                    updated_config[key] = int(value)
+                except ValueError:
+                    flash(f"Invalid device index for {key}", "danger")
+                    return redirect(url_for('settings'))
+            
+        # Handle all other string values
         else:
             updated_config[key] = value
     
@@ -658,6 +329,46 @@ def save_settings():
         flash(message, "danger")
         
     return redirect(url_for('settings'))
+
+@app.route('/audio-test', methods=['POST'])
+@login_required
+def audio_test():
+    """Test an audio device."""
+    device_type = request.form.get('device_type', 'output')
+    device_index = request.form.get('device_index', 'null')
+    
+    # Convert device_index to proper type
+    if device_index == 'null':
+        device_index = None
+    else:
+        try:
+            device_index = int(device_index)
+        except ValueError:
+            return jsonify({
+                'success': False,
+                'message': 'Invalid device index'
+            })
+    
+    # Perform audio test
+    try:
+        result = test_audio_device(device_index=device_index, mode=device_type)
+        if result:
+            add_activity(f"Audio {device_type} test successful on device {device_index}")
+            return jsonify({
+                'success': True,
+                'message': f'Audio {device_type} test successful'
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'message': f'Audio {device_type} test failed'
+            })
+    except Exception as e:
+        logger.exception(f"Error during audio test: {e}")
+        return jsonify({
+            'success': False,
+            'message': f'Error: {str(e)}'
+        })
 
 @app.route('/logs')
 @login_required
@@ -683,7 +394,7 @@ def download_logs():
         return Response(
             generate(),
             mimetype="text/plain",
-            headers={"Content-Disposition": "attachment;filename=echocore.log"}
+            headers={"Content-Disposition": f"attachment;filename=echocore_logs_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.log"}
         )
     except Exception as e:
         flash(f"Error downloading logs: {str(e)}", "danger")
@@ -695,26 +406,60 @@ def perform_action():
     action = request.form.get('action')
     
     if action == 'restart':
-        # In a real implementation, this would restart the application
-        add_activity("System restart requested")
-        flash("Restart request sent. System will restart momentarily.", "success")
+        # Get references to needed components
+        llm_handler = getattr(app, 'llm_handler', None)
+        state_manager = getattr(app, 'state_manager', None)
+        
+        # Reset state and conversation if available
+        if state_manager:
+            state_manager.clear_error()
+            if state_manager.get_state() != State.IDLE:
+                state_manager.set_state(State.IDLE)
+        
+        if llm_handler:
+            try:
+                llm_handler.reset_conversation()
+            except Exception as e:
+                logger.error(f"Error resetting conversation: {e}")
+                
+        add_activity("System reset requested")
+        flash("Reset request sent. System state has been reset.", "success")
     
     elif action == 'reset_conversation':
         # Reset LLM conversation history
         llm_handler = getattr(app, 'llm_handler', None)
         if llm_handler:
-            llm_handler.reset_conversation()
-            add_activity("Conversation history reset")
-            flash("Conversation history has been reset.", "success")
+            try:
+                llm_handler.reset_conversation()
+                add_activity("Conversation history reset")
+                flash("Conversation history has been reset.", "success")
+            except Exception as e:
+                flash(f"Error resetting conversation: {str(e)}", "danger")
         else:
             flash("Could not access LLM handler.", "danger")
     
     elif action == 'test_audio':
-        # In a real implementation, this would play a test sound
-        add_activity("Audio test requested")
-        flash("Audio test signal sent.", "success")
+        # Test audio output with default device
+        try:
+            result = test_audio_device()
+            add_activity("Audio test executed")
+            
+            if result:
+                flash("Audio test completed successfully.", "success")
+            else:
+                flash("Audio test failed. Check logs for details.", "danger")
+        except Exception as e:
+            flash(f"Audio test error: {str(e)}", "danger")
     
     return redirect(url_for('index'))
+
+@app.route('/favicon.ico')
+def favicon():
+    """Serve favicon to prevent 404 errors in logs."""
+    return send_from_directory(
+        os.path.join(app.root_path, 'static'),
+        'favicon.ico', mimetype='image/vnd.microsoft.icon'
+    )
 
 # API endpoints for programmatic access
 @app.route('/api/status')
@@ -730,8 +475,33 @@ def api_status():
     return jsonify({
         'status': current_state,
         'uptime': get_uptime(),
-        'stats': stats
+        'stats': stats,
+        'activities': recent_activities
     })
+
+@app.route('/api/logs')
+@login_required
+def api_logs():
+    count = request.args.get('count', '50')
+    try:
+        count = int(count)
+    except ValueError:
+        count = 50
+    
+    log_data = load_logs(count)
+    return jsonify({
+        'logs': log_data
+    })
+
+@app.route('/api/devices')
+@login_required
+def api_devices():
+    # Force refresh of device cache
+    global audio_devices_cache
+    audio_devices_cache = None
+    
+    audio_devices = get_audio_devices()
+    return jsonify(audio_devices)
 
 # Web interface thread
 class WebInterfaceThread(threading.Thread):
@@ -740,6 +510,7 @@ class WebInterfaceThread(threading.Thread):
         self.state_manager = state_manager
         self.llm_handler = llm_handler
         self.stop_event = stop_event
+        self.previous_state = None
         
     def run(self):
         if not config.WEB_INTERFACE_ENABLED:
@@ -750,6 +521,33 @@ class WebInterfaceThread(threading.Thread):
             # Attach references to Flask application context
             app.state_manager = self.state_manager
             app.llm_handler = self.llm_handler
+            
+            # Setup state change monitoring
+            if self.state_manager:
+                self.previous_state = self.state_manager.get_state()
+                
+                # Use a separate thread to monitor state changes
+                def monitor_state_changes():
+                    while not (self.stop_event and self.stop_event.is_set()):
+                        current_state = self.state_manager.get_state()
+                        if current_state != self.previous_state:
+                            # Record the transition
+                            add_state_transition(self.previous_state, current_state)
+                            self.previous_state = current_state
+                        time.sleep(0.1)  # Check frequently but not too often
+                
+                monitor_thread = threading.Thread(
+                    target=monitor_state_changes, 
+                    daemon=True
+                )
+                monitor_thread.start()
+            
+            # Create basic favicon.ico if it doesn't exist
+            favicon_path = os.path.join(app.static_folder, 'favicon.ico')
+            if not os.path.exists(favicon_path):
+                # This is a minimal 16x16 blue favicon
+                with open(favicon_path, 'wb') as f:
+                    f.write(bytes.fromhex('00000100010010100000010020006804000016000000280000001000000020000000010020000000000000040000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000073E9FF0073E9FF1173E9FF6373E9FFA273E9FFCE73E9FFDC73E9FFDC73E9FFCE73E9FFA273E9FF6373E9FF1173E9FF000000000000000000000000000000000073E9FF0073E9FF5A73E9FFD673E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFD673E9FF5A0000000000000000000000000073E9FF1173E9FFD673E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFD673E9FF1100000000000000000073E9FF6373E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF000000000000000000000000A273E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF000000000000000000000000CE73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF000000000000000000000000DC73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF000000000000000000000000DC73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF000000000000000000000000CE73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF000000000000000000000000A273E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF000000000000000000000000000073E9FF6373E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FF63000000000000000000000000000073E9FF1173E9FFD673E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFD673E9FF11000000000000000000000000000000000073E9FF0073E9FF5A73E9FFD673E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFFF73E9FFD673E9FF5A73E9FF00000000000000000000000000000000000000000000000073E9FF0073E9FF1173E9FF6373E9FFA273E9FFCE73E9FFDC73E9FFDC73E9FFCE73E9FFA273E9FF6373E9FF1173E9FF0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000'))
             
             # Run the Flask application
             logger.info(f"Starting web interface on {config.WEB_INTERFACE_HOST}:{config.WEB_INTERFACE_PORT}")
@@ -765,19 +563,450 @@ class WebInterfaceThread(threading.Thread):
             if self.stop_event and not self.stop_event.is_set():
                 logger.info("Web interface stopped.")
 
-# For testing standalone
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    logger.info("Starting web interface in standalone mode...")
+# Create the necessary CSS and JS files
+def create_static_files():
+    # Create CSS file
+    css_path = os.path.join(app.static_folder, 'style.css')
+    if not os.path.exists(css_path):
+        with open(css_path, 'w') as f:
+            f.write("""
+/* EchoCore Web Interface */
+:root {
+    --primary-color: #3498db;
+    --primary-dark: #2980b9;
+    --secondary-color: #2ecc71;
+    --error-color: #e74c3c;
+    --warning-color: #f39c12;
+    --background-dark: #121212;
+    --background-card: #1e1e1e;
+    --background-nav: #282828;
+    --text-color: #ecf0f1;
+    --text-muted: #95a5a6;
+    --border-color: #333;
+}
+
+body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0;
+    padding: 0;
+    background-color: var(--background-dark);
+    color: var(--text-color);
+    line-height: 1.6;
+}
+
+.container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+header {
+    background-color: var(--background-card);
+    padding: 20px;
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 20px;
+}
+
+header h1 {
+    margin: 0;
+    color: var(--primary-color);
+    font-size: 28px;
+}
+
+nav {
+    background-color: var(--background-nav);
+    padding: 10px 20px;
+    margin-bottom: 20px;
+}
+
+nav a {
+    color: var(--text-color);
+    text-decoration: none;
+    margin-right: 20px;
+    font-weight: bold;
+    padding: 5px 10px;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+nav a:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: var(--primary-color);
+}
+
+.card {
+    background-color: var(--background-card);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+}
+
+.card h2 {
+    margin-top: 0;
+    color: var(--primary-color);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+    font-size: 20px;
+}
+
+.card h3 {
+    color: var(--text-color);
+    font-size: 18px;
+    margin-top: 25px;
+    margin-bottom: 15px;
+}
+
+label {
+    display: block;
+    margin-bottom: 5px;
+    font-weight: bold;
+    color: var(--text-color);
+}
+
+input, select, textarea {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 15px;
+    background-color: #333;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: var(--text-color);
+    font-family: inherit;
+    font-size: 14px;
+}
+
+button, .btn {
+    background-color: var(--primary-color);
+    color: white;
+    border: none;
+    padding: 10px 15px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-weight: bold;
+    transition: background-color 0.2s;
+    font-size: 14px;
+    display: inline-block;
+    text-decoration: none;
+}
+
+button:hover, .btn:hover {
+    background-color: var(--primary-dark);
+}
+
+.btn-small {
+    padding: 5px 10px;
+    font-size: 12px;
+}
+
+.btn-danger {
+    background-color: var(--error-color);
+}
+
+.btn-secondary {
+    background-color: var(--secondary-color);
+}
+
+.btn-warning {
+    background-color: var(--warning-color);
+}
+
+.alert {
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    border: 1px solid transparent;
+}
+
+.alert-success {
+    background-color: rgba(46, 204, 113, 0.2);
+    border-color: var(--secondary-color);
+    color: #27ae60;
+}
+
+.alert-danger {
+    background-color: rgba(231, 76, 60, 0.2);
+    border-color: var(--error-color);
+    color: #e74c3c;
+}
+
+.alert-warning {
+    background-color: rgba(243, 156, 18, 0.2);
+    border-color: var(--warning-color);
+    color: #f39c12;
+}
+
+.status-indicator {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    margin-right: 8px;
+}
+
+.status-idle { background-color: var(--primary-color); }
+.status-listening { background-color: #f1c40f; } /* Yellow */
+.status-processing_stt { background-color: #9b59b6; } /* Purple */
+.status-thinking { background-color: #e67e22; } /* Orange */
+.status-synthesizing_tts { background-color: #1abc9c; } /* Teal */
+.status-speaking { background-color: var(--secondary-color); } /* Green */
+.status-error { background-color: var(--error-color); } /* Red */
+.status-unknown { background-color: var(--text-muted); } /* Gray */
+
+.log-container {
+    background-color: #0d0d0d;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    padding: 10px;
+    height: 500px;
+    overflow-y: auto;
+    font-family: 'Courier New', monospace;
+    margin-bottom: 15px;
+    font-size: 13px;
+}
+
+.log-line {
+    margin: 0;
+    padding: 3px 0;
+    border-bottom: 1px solid #1a1a1a;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.log-error {
+    color: #e74c3c;
+}
+
+.log-warning {
+    color: #f39c12;
+}
+
+.log-info {
+    color: #3498db;
+}
+
+.log-debug {
+    color: #95a5a6;
+}
+
+.form-group {
+    margin-bottom: 20px;
+}
+
+.form-check {
+    display: flex;
+    align-items: center;
+    margin-bottom: 15px;
+}
+
+.form-check input[type="checkbox"] {
+    width: auto;
+    margin-right: 10px;
+    margin-bottom: 0;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 20px;
+}
+
+.flex {
+    display: flex;
+    gap: 10px;
+}
+
+.flex-between {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.stat-box {
+    display: flex;
+    align-items: center;
+    background-color: rgba(255, 255, 255, 0.05);
+    padding: 15px;
+    border-radius: 5px;
+    margin-bottom: 10px;
+}
+
+.stat-icon {
+    margin-right: 15px;
+    font-size: 24px;
+    color: var(--primary-color);
+}
+
+.stat-info h4 {
+    margin: 0;
+    font-size: 14px;
+    color: var(--text-muted);
+}
+
+.stat-info p {
+    margin: 5px 0 0 0;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.activity-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.activity-list li {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.activity-list .time {
+    color: var(--text-muted);
+    font-size: 12px;
+    margin-right: 10px;
+}
+
+.transitions-list {
+    padding: 0;
+    margin: 0;
+    list-style: none;
+}
+
+.transitions-list li {
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+    display: flex;
+    align-items: center;
+}
+
+.transitions-list .time {
+    color: var(--text-muted);
+    font-size: 12px;
+    width: 80px;
+}
+
+.transitions-list .arrow {
+    margin: 0 10px;
+    color: var(--primary-color);
+}
+
+.transitions-list .state {
+    padding: 3px 8px;
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.1);
+    font-size: 12px;
+}
+
+.filter-controls {
+    margin-bottom: 15px;
+    display: flex;
+    gap: 10px;
+}
+
+.settings-section {
+    margin-bottom: 30px;
+}
+
+.collapsible {
+    cursor: pointer;
+    background-color: var(--background-nav);
+    padding: 10px 15px;
+    margin-bottom: 10px;
+    border-radius: 4px;
+    position: relative;
+}
+
+.collapsible::after {
+    content: "+";
+    position: absolute;
+    right: 15px;
+    top: 10px;
+}
+
+.collapsible.active::after {
+    content: "-";
+}
+
+.collapsible-content {
+    display: none;
+    padding: 15px;
+    background-color: rgba(255, 255, 255, 0.05);
+    border-radius: 4px;
+    margin-bottom: 15px;
+}
+
+.device-list {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 20px;
+}
+
+.device-card {
+    background-color: rgba(255, 255, 255, 0.05);
+    padding: 15px;
+    border-radius: 5px;
+    position: relative;
+}
+
+.device-card h4 {
+    margin-top: 0;
+    margin-bottom: 10px;
+    font-size: 16px;
+}
+
+.device-card .device-id {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    background-color: var(--primary-color);
+    color: white;
+    padding: 2px 6px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+
+.device-card p {
+    color: var(--text-muted);
+    margin: 5px 0;
+    font-size: 14px;
+}
+
+.device-card .btn {
+    margin-top: 10px;
+}
+
+/* Error message styling */
+.error-message {
+    background-color: rgba(231, 76, 60, 0.2);
+    border: 1px solid var(--error-color);
+    padding: 15px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+    color: #e74c3c;
+}
+
+.error-message h3 {
+    margin-top: 0;
+    color: #e74c3c;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .grid {
+        grid-template-columns: 1fr;
+    }
     
-    # Enable web interface for testing
-    config.WEB_INTERFACE_ENABLED = True
+    .device-list {
+        grid-template-columns: 1fr;
+    }
     
-    web_thread = WebInterfaceThread()
-    web_thread.start()
+    .flex {
+        flex-direction: column;
+    }
     
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        logger.info("Shutting down...")
+    .container {
+        padding: 10px;
+    }
+}
